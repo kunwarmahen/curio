@@ -1,0 +1,52 @@
+[project]
+name = "curio"
+version = "0.1.0"
+description = "Curio: find the most valuable learning segments in long-form video"
+readme = "README.md"
+authors = [
+    { name = "Mahen Singh", email = "kunwarmahen@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "anthropic>=2.12.0",
+    "fastapi>=0.165.0",
+    "httpx>=0.28.1",
+    "ollama>=0.6.3",
+    "pydantic>=2.14.4",
+    "pydantic-settings>=2.16.3",
+    "python-dotenv>=1.2.4",
+    "sqlalchemy>=2.1.9",
+    "uvicorn[standard]>=0.54.0",
+    "youtube-transcript-api>=1.2.5",
+    "yt-dlp>=2026.10.26",
+]
+
+[project.scripts]
+curio = "curio_learn.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.11.7,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+    "ruff>=0.17.6",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+ignore = ["SIM905"]
+
+[tool.uv.build-backend]
+# The Python package is `curio_learn`: a top-level `curio` module collides with the
+# `curio` async library, which sniffio (used by httpx/anyio/Starlette) probes for.
+module-name = "curio_learn"

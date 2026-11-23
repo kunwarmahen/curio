@@ -1,0 +1,246 @@
+# Development progress
+
+## Milestone status
+
+| Phase | Status |
+|---|---|
+| Architecture and design (`docs/ARCHITECTURE.md`) | ✅ done |
+| **Phase 1: Functional MVP** | ✅ implemented, tested offline, verified end to end on 4 real videos (lecture, podcast, two auto-captioned talks), locally and in Podman |
+| Web UI | ✅ React + Vite with watch map and IFrame player (replaced Streamlit) |
+| Deployment | ✅ Podman image + `curio.sh` |
+| Phase 2: Intelligent learning | 🟡 partly done: learning profiles, custom objective, redundancy detection, skip recommendations, sentence-level boundaries and mid-roll ad removal are in. Learning notes are not. |
+| Phase 3: Interactive learning | ⏳ only segment completion tracking so far |
+| Phase 4: Multi-video intelligence | ⏳ not started |
+
+## Phase 1 log (2026-11-23)
+
+### Built
+- `ingestion`: URL parsing (watch, youtu.be, shorts, embed, live, bare id);
+  yt-dlp metadata without download; caption track selection (manual → auto →
+  translated) with typed errors.
+- `processing.normalize`: cue cleanup (annotations, speaker markers, HTML
+  entities, rolling auto-caption duplicates, overlapping cue times) and merging
+  into 20–45 s blocks that end at sentence boundaries.
+- `llm`: provider protocol, structured generation with Pydantic validation
+  and a retry that feeds the validation error back. Ollama (constrained JSON
+  schema, fixed context with truncation guard) and Anthropic (structured outputs, adaptive
+  thinking, streaming, prompt caching of the shared outline, refusal fallback).
+- `analysis`: outline (single pass or windowed), contextual evaluation,
+  TF-IDF redundancy, explainable scoring, profile-aware weights and kind priors,
+  time-budgeted playlist with prerequisite pull-in and merging, validation and repair.
+- `storage`: SQLAlchemy/SQLite (videos, transcripts, analyses, segments),
+  cache keyed by video + preferences + model + pipeline version.
+- `service`, FastAPI (`/api/v1`), CLI. (A Streamlit UI was built first and then replaced; see the UI log below.)
+- 98 offline tests (ad detection and carving, sentence units and boundary refinement, URL parsing, normalization, segmentation repair, scoring and
+  calibration, playlist and prerequisites, validation, LLM retry, request shapes and
+  truncation guard, service caching, stale runs, API).
+
+### Problems found and fixed
+1. **Package name collision:** a top-level `curio` package breaks httpx, anyio and
+   Starlette, because `sniffio` assumes any module named `curio` is the curio async
+   library. The package was renamed to `curio_learn`; product and CLI names are unchanged.
+2. **Schema bug that dropped titles:** the schema tightener stripped JSON Schema
+   `title` annotations and, by mistake, the section property *named* `title`, so
+   Ollama's constrained decoding could never produce section titles. Fixed, with a
+   regression test.
+3. **Stale in-progress analyses were reused:** an analysis left "running" by a
+   killed process was handed back as if it were live. In-progress reuse now
+   requires a progress update within the last 20 minutes, the synchronous CLI path
+   never returns an unfinished analysis, and the API and UI mark interrupted runs
+   as failed at startup.
+4. **Grade inflation made the tiers meaningless:** qwen rated nearly every section
+   7–10, so 13 of 15 sections were "essential", and the new-concepts bonus (+6)
+   applied to every section. Half of each base score now comes from the section's
+   rank within the video (`within_video_rank`, shown with its reason). Novelty counts
+   only concepts a section *introduces*, and core sections that introduce nothing
+   new lose points.
+5. **Prerequisite chains crowded out the best sections:** recursive pull-in of
+   `builds_on` (the model marks almost every section as building on the previous
+   one) spent the budget on prerequisites and then dropped MIPROv2 (score 93),
+   the section that needed them. Now only direct prerequisites rated recommended or
+   better are pulled in, and only when they fit together with the section itself.
+6. **Ollama reloaded the model and offloaded it to the CPU:** a different `num_ctx`
+   per call forced reloads, and contexts up to 64k put 14% of the model on the CPU.
+   Every call now uses one fixed context (32k by default; 100% GPU on a 24 GB card).
+   Ollama's reported prompt token count is checked so a silently truncated
+   transcript raises an error. (Measured: estimate 21,278 vs. actual 20,927 tokens.)
+7. **Startup cleanup failed live runs in other processes:** the API and UI marked
+   *every* running analysis as failed at startup, including a CLI run in progress.
+   Cleanup and reuse now share a 20-minute staleness rule.
+
+### Verified result: `e_m99aR7_3Q` (Stanford CS329Z Lecture 9, 80:34, manual captions)
+
+| | First run | After fixes |
+|---|---|---|
+| Total analysis time (qwen3.8 27B, RTX 3090) | 1,240 s | **147 s** |
+| Outline call / evaluation batches | 330 s / ~455 s each | 63 s / 40–44 s |
+| Sections | 15 | 16 |
+| Tiers (essential/recommended/optional/skip) | 13 / 1 / 1 / 0 | 7 / 4 / 2 / 3 |
+| Playlist | 26:10, 3 segments | **24:05, 3 segments, saves 56:29** |
+| Validation | ok | ok, 0 warnings, 0 repairs |
+
+Playlist after the fixes: GEPA (40:18–46:51) · SFT → PPO/GRPO (51:06–1:06:55) ·
+choosing between context and weight optimization (1:18:48–1:20:31). Skipped:
+intro and poll, the learning-objectives slide, and the brief TextGrad aside.
+Boundary spot check (transcript text either side of 4 boundaries): GEPA ("Then let's
+talk about genetic Pareto prompt evolution"), RL ("Let's talk about reinforcement
+learning") and the closing section ("Which strategy should you use?") start exactly at
+the transition. **SFT starts one block (~30 s) early**, in the tail of a GEPA Q&A answer.
+
+Observations:
+- Picks vary between runs (temperature 0.2). Run 1 chose MIPROv2 instead of SFT.
+  Both are defensible, but stability across runs is worth measuring.
+- At the default 30% budget, a section can be "essential" yet not in the playlist
+  (here MIPROv2 and on-policy distillation). The UI lists it under "More
+  segments", and a target watch time includes it.
+
+### UI: Streamlit replaced with React + Vite (2026-11-23)
+The user prefers not to use Streamlit. `web/` is a React 19 + TypeScript app
+(Vite) on the FastAPI API; `uv run curio api` serves the built `web/dist`
+with client-side routes (`/`, `/v/<analysis id>`). Streamlit, its `curio ui` command
+and its dependency are gone.
+- Watch map: the whole video as one line, sections highlighted by value, the
+  playlist underlined, and a live playhead. Stretches are keyboard-focusable
+  buttons that play that section.
+- The YouTube IFrame API replaces the static embed. It cues the first part without
+  autoplay, stops at the end of a part, marks it watched, continues to the next
+  (can be turned off), and offers 1×–2× speed.
+- New API: `GET /analyses/{id}/completed`; recent videos include their watch map.
+- Checked: production build and oxlint clean; desktop (1440 px) and mobile (390 px)
+  screenshots; routing (deep links, unknown API → 404, path traversal → index.html);
+  the YouTube player iframe is created. **Not verified:** real playback behavior
+  (cue, stop at the part's end, auto-advance), because headless Chrome doesn't play
+  YouTube video.
+
+### Sentence-level boundaries (2026-11-23)
+New step 6b (`analysis/boundaries.py`). Caption cues are grouped into sentence units
+(1,110 units for this lecture, about 4.3 s each). One batched LLM call picks, for each
+boundary, the first sentence of the new section from the sentences around it. Code moves
+the start to that unit's cue time and rejects choices that are out of range or would
+leave a section under 30 s. Evaluation now uses the text that plays between the refined
+times. Also fixed: selection didn't count the 2 s lead-in and 1 s tail per segment, so a
+playlist could finish a few seconds over its budget.
+
+Result on `e_m99aR7_3Q` (run 3, 22 sections):
+- All 21 boundaries checked: each now starts on the speaker's transition sentence
+  ("Then let's talk about bootstrap reasoning", "Next paper I'm going to talk about is
+  MIPROv2", "Let's talk about reinforcement learning", "Which strategy should you
+  use?"). Wrap-up lines ("Cool.", "No questions.", "So any questions about that?")
+  stay with the ending section.
+- **SFT now starts at 51:27** ("Then we are going to talk about weight optimization"),
+  instead of 51:08 inside a GEPA Q&A answer.
+- 20 of 21 starts moved later, by 0.5–18.6 s. The refinement call took 20 s;
+  validation passed with no warnings or repairs.
+- Total time 201 s, up from 147 s: the 20 s refinement call, plus a larger outline
+  this run (22 sections vs. 16; 85 s vs. 63 s for the outline call).
+- Playlist: GEPA (40:18–47:09) · SFT introduction (51:25–53:33) · PPO → GRPO →
+  DeepSeek-R1 (58:14–1:12:57) · choosing a strategy (1:18:53–1:20:31); 25:18 total.
+- Remaining resolution limit: captions have no word timings, so when a new topic
+  begins mid-cue the start is that cue's start, up to a few seconds early.
+
+### Podman (2026-11-23)
+`Containerfile` (Node 22 build stage for `web/dist`; Python 3.12-slim runtime with
+uv 0.11.7, non-root user, health check) and `curio.sh` (build, start, stop,
+restart, run, status, logs, analyze, shell). The image is 390 MB and holds no model:
+Ollama stays on the host GPU.
+
+Problems found and fixed while testing:
+1. **Port 8000 was taken** by another app on this machine (the `blockoku`
+   container). Curio now uses **8470** everywhere (`curio.sh`, `curio api`'s default,
+   and the Vite dev proxy). `curio.sh` checks the port first and says how to choose
+   another (`CURIO_PORT=…`) instead of passing on Podman's raw error.
+2. **The container couldn't reach Ollama.** Under rootless Podman's `pasta`
+   network, `host.containers.internal` resolved to the host's LAN address
+   (192.168.1.44), which pasta treats as the container's own, so connections were
+   refused. The script now maps `169.254.1.2` to the host (`--map-guest-addr`) and
+   points `host.containers.internal` at it. `start` verifies the container can
+   reach Ollama and warns if not.
+3. **The health check was dropped:** Podman's default OCI image format ignores
+   `HEALTHCHECK`, so the image is built with `--format docker`.
+
+Verified: build; start, which waits for health and confirms Ollama is reachable from
+the container (version 0.32.15); status (exit code 1 when stopped); logs; `analyze`
+(usage message without a URL, CLI errors passed through); data in the `curio-data`
+volume survives restart; the container runs as non-root; the port check reports a
+conflict. A full analysis inside the container (`./curio.sh analyze`, the 80-minute
+lecture) completed in 218 s against the host's Ollama.
+
+### Calibration on more videos (2026-11-23)
+Chosen to stress different things, each with a different learning profile:
+
+| Video | Type | Captions | Profile |
+|---|---|---|---|
+| `RFccAuyPPOg` ElevenLabs founder interview (David Senra), 71 min | podcast | manual | general |
+| `s_o8dwzRlu4` Kubernetes Crash Course (TechWorld with Nana), 72 min | tutorial with demos | auto, **no punctuation** | beginner |
+| `rPsMwpFmdf0` PostgreSQL Performance Mastery (AWS Events), 59 min | conference talk | auto, sparse punctuation | technical |
+
+**First pass: what worked.** Sponsor blocks, intros, host small talk and course
+promotion were found and skipped with specific reasons. Interview boundaries started at
+the host's questions. Tutorial concept and demo halves were labeled correctly.
+
+**Problems found and fixed:**
+1. **A mid-roll ad was hidden inside an "essential" section.** In the podcast, a 71 s
+   AppLovin read (41:49–43:00) opened with a segue that sounds like content ("I found
+   one of my all-time favorite quotes… Zero to One") and the outline kept it inside a
+   content section. New step 6c (`analysis/ads.py`): code flags ad-like sentences and
+   the LLM confirms each window and names the ad's first and last sentence. Rerun:
+   cut out at **41:49–42:58**, starting at the segue. The Kubernetes sponsor read
+   (25:49–26:27) was also found; in the lecture, the ad check correctly found no ad.
+2. **Boundaries fell mid-sentence on auto-captions.** With no punctuation, 12 s
+   "sentence" units started anywhere ("certified kubernetes ‖ administrator now we…").
+   Measured punctuation: human captions ≈ 7 sentence marks per 100 words;
+   Kubernetes 0.01; PostgreSQL 3.8 (26-word "sentences"). Below 5 per 100 words, each
+   caption cue (≈ 2.5 s) is now a unit. Rerun: Kubernetes starts land on the
+   speaker's cues ("so now let's see another very important…", "before moving on I
+   want to give a shout…"). PostgreSQL still often starts a few words early,
+   because its cues are long lines and the topic changes mid-cue; captions carry no
+   word timings, so this is the resolution limit.
+3. **Solid content was labeled "safe to skip"** purely by within-video rank (the
+   podcast's founding story: rated 51, ranked 17 of 18 → 32 → skip). New
+   `content_floor` rule: core/example/demo sections the AI rated ≥ 50, and not
+   redundant, stay at least optional, with the reason shown.
+4. **Calibration raised junk sections:** the sponsor and outro sections (rated 0)
+   tied at the bottom, which lifted the intro (rated 1.7) by +6.8. Sponsor and
+   housekeeping sections are now left out of the ranking.
+5. **Repeated caption cues lost their time.** A cue that repeated the previous one
+   word for word was dropped instead of extending the previous cue's end, so its
+   seconds vanished from the transcript. Fixed in `clean_cues`, with a regression test.
+6. **Tiny content fragments were absorbed into ads.** When an ad was cut out near a
+   boundary, a 12 s piece of real content was labeled sponsor. Fragments now join
+   neighbouring content and are absorbed into an ad only when ads surround them.
+7. **Outline granularity varied 13–28 sections** for the same 80-minute lecture, and
+   the 13-section run lost GEPA from the playlist. The outline prompt now gives an
+   expected count from the duration (2.5–5 min per section; 16–32 for 80 min). One
+   rerun in the container: 28 sections, and the playlist covered both halves (STaR,
+   MIPROv2, GEPA, GRPO, strategy).
+8. Section tiling is now validated **in time** (ordered, no overlaps, no gap
+   containing speech) instead of by block numbers, since ads can be cut out mid-block.
+
+**Results after the fixes** (pipeline v4; lecture v5 in the container):
+
+| Video | Playlist | Tiers (ess/rec/opt/skip) | Skipped, with reasons |
+|---|---|---|---|
+| Podcast | 22:26 of 71:07 | 7 / 4 / 4 / 4 | 2 sponsor reads, 2 low-rated personal-story sections |
+| Kubernetes | 23:42 of 72:03 | 9 / 3 / 2 / 3 | intro, sponsor read, paid-course outro |
+| PostgreSQL | 18:30 of 59:20 | 4 / 2 / 2 / 3 | host small talk, brief index overview deferred to another session, AWS course promo |
+| Lecture | 26:14 of 80:34 | — | intro, objectives slide, 3 audience Q&A blocks, results recap |
+
+Observations, not yet acted on:
+- The beginner Kubernetes playlist leaves out "What is Kubernetes and why it
+  exists" (rated 82). It is a prerequisite of a prerequisite, and only direct
+  prerequisites are pulled in (on purpose, since run 1, when chains crowded out the
+  best sections). For an all-strong video and a 22-minute budget this is a judgment
+  call; a beginner-specific rule could put foundations first.
+- Per-call times were 2–3× slower during these runs than earlier. A repeat benchmark
+  afterwards matched the earlier one exactly (21k-token prefill 19.0 s, 61 tokens/s),
+  and another app on this machine (`aksharallm.portal`) started at the same time, so
+  GPU contention is the likely cause. Not confirmed.
+- Outline variance is reduced, not eliminated: one anchored run is not proof.
+
+### Known gaps / next steps
+- The Anthropic provider is covered by unit tests with a mocked client only.
+  No API key was available, so it has not been run against the live API yet.
+- Calibrate the scoring thresholds and the redundancy threshold on more videos
+  (lectures, podcasts, tutorials with auto-captions).
+- Phase 2: learning notes and takeaways. Phase 3: Ask the Video (retrieval over
+  blocks with `nomic-embed-text`), quizzes and flashcards, saved custom playlists.
