@@ -1,3 +1,5 @@
+<img src="web/public/favicon.svg" width="56" height="56" alt="">
+
 # Curio
 
 **Watch the parts of long videos that teach you the most.**

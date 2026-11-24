@@ -10,6 +10,7 @@ import {
   type RecentVideo,
 } from '../api'
 import { CourseList } from '../components/Courses'
+import { Wordmark } from '../components/Logo'
 import { QueueList } from '../components/Queue'
 import { WatchMap } from '../components/WatchMap'
 import { PROFILES, duration, isPlaylistLink, playlistOfVideo, queueHours } from '../format'
@@ -112,7 +113,7 @@ export function Home() {
   return (
     <main className="home">
       <header className="home__intro">
-        <p className="wordmark">Curio</p>
+        <Wordmark />
         <h1>Find the parts of a long video worth your time.</h1>
         <p className="lede">
           Paste a lecture, talk or podcast from YouTube. Curio reads the whole transcript and builds a

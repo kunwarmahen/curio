@@ -464,7 +464,7 @@ class LectureState(StrEnum):
 
 class CourseLecture(BaseModel):
     position: int  # 1-based, in course order
-    label: str = ""  # "Lecture 3" when the titles number the lectures, else "#3"
+    label: str = ""  # "Lecture 3" when the titles number the lectures, "Guest lecture", else "#3"
     video_id: str
     title: str
     duration_s: float = 0.0

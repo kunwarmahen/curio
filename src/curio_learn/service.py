@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -64,6 +65,8 @@ COURSE_VERSION = 1
 COURSE_MINUTES = (60, 90, 120, 180, 240, 360)
 
 Progress = Callable[[str], None]
+
+_GUEST_RE = re.compile(r"\bguest\b", re.I)
 
 
 class CurioService:
@@ -726,6 +729,15 @@ class CurioService:
         numbers = [lecture_number(x["title"]) for x in course["lectures"]]
         named = [n for n in numbers if n is not None]
         use_numbers = len(named) == len(set(named))
+        guests = [i for i, x in enumerate(course["lectures"]) if numbers[i] is None and _GUEST_RE.search(x["title"])]
+
+        def label(i: int) -> str:
+            if use_numbers and numbers[i] is not None:
+                return f"Lecture {numbers[i]}"
+            if i in guests:
+                return "Guest lecture" if len(guests) == 1 else f"Guest lecture {guests.index(i) + 1}"
+            return f"#{i + 1}"
+
         out = []
         for pos, lec in enumerate(course["lectures"], 1):
             mine = [r for r in rows if r["video_id"] == lec["video_id"]]
@@ -739,7 +751,7 @@ class CurioService:
             )
             item = CourseLecture(
                 position=pos,
-                label=f"Lecture {numbers[pos - 1]}" if use_numbers and numbers[pos - 1] is not None else f"#{pos}",
+                label=label(pos - 1),
                 video_id=lec["video_id"],
                 title=lec["title"],
                 duration_s=lec.get("duration_s") or 0,

@@ -6,7 +6,8 @@ import { PracticePanel } from '../components/Practice'
 import { Player, type Clip } from '../components/Player'
 import { WatchMap, WatchMapLegend, type Stretch } from '../components/WatchMap'
 import { IMPORTANCE_LABEL, PROFILES, clock, duration, queueHours } from '../format'
-import { linkProps, navigate } from '../router'
+import { BackLink } from '../components/Logo'
+import { navigate } from '../router'
 
 export function VideoPage({ id }: { id: string }) {
   const [analysis, setAnalysis] = useState<Analysis | null>(null)
@@ -54,13 +55,6 @@ export function VideoPage({ id }: { id: string }) {
   return <Results analysis={analysis} />
 }
 
-function BackLink() {
-  return (
-    <a className="back" {...linkProps('/')}>
-      ← All videos
-    </a>
-  )
-}
 
 function Progress({ analysis, steps }: { analysis: Analysis; steps: string[] }) {
   return (

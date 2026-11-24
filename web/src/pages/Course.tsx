@@ -10,6 +10,7 @@ import {
 } from '../api'
 import { Player, type Clip } from '../components/Player'
 import { IMPORTANCE_LABEL, PROFILES, clock, duration, shortTitle } from '../format'
+import { BackLink } from '../components/Logo'
 import { linkProps, navigate } from '../router'
 
 const MINUTES = [60, 90, 120, 180, 240, 360]
@@ -81,13 +82,6 @@ export function CoursePage({ id }: { id: string }) {
   )
 }
 
-function BackLink() {
-  return (
-    <a className="back" {...linkProps('/')}>
-      ← All videos
-    </a>
-  )
-}
 
 function PlanSection({ course, onChange }: { course: Course; onChange: () => void }) {
   const usable = course.lectures.filter((l) => l.analysis_id).length

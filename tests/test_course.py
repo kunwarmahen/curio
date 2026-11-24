@@ -24,7 +24,8 @@ TECH = LearningPreferences(profile=LearningProfile.TECHNICAL, custom_objective="
 
 class FakePlaylists:
     def get_playlist(self, playlist_id):
-        entries = [PlaylistEntry(video_id=v, title=f"Lecture {n}", duration_s=1200) for n, v in enumerate(VIDS, 1)]
+        titles = ["Lecture 1", "Lecture 2", "Benchmarks | Guest Lecture with A. Speaker"]
+        entries = [PlaylistEntry(video_id=v, title=t, duration_s=1200) for v, t in zip(VIDS, titles, strict=True)]
         return PlaylistInfo(playlist_id=playlist_id, title="Test Course", channel="Uni", entries=entries, unavailable=1)
 
 
@@ -74,6 +75,7 @@ def test_import_queues_missing_lectures_and_reports_states(service):
     service.queue_course(course_id)
     course = service.course(course_id)
     assert not course.importing and course.unavailable == 1 and course.title == "Test Course"
+    assert [lec.label for lec in course.lectures] == ["Lecture 1", "Lecture 2", "Guest lecture"]
     states = [(lec.state, lec.analysis_id) for lec in course.lectures]
     assert states[0] == (LectureState.READY, done)
     assert states[1] == (LectureState.OTHER_GOAL, other) and course.lectures[1].pending_id
