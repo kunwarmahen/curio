@@ -80,6 +80,9 @@ def score_sections(
     relative, rank_of = _relative_scores({s.id: base[s.id] for s in sections if s.kind in RANKED_KINDS})
     pool = len(relative)
 
+    foundations = _foundation_reach(sections, evaluations) if spec.foundation_bonus else {}
+    teaching = sum(1 for s in sections if s.kind in RANKED_KINDS) or 1
+
     seen_concepts: set[str] = set()
     scored: list[ScoredSection] = []
     for i, s in enumerate(sections):
@@ -167,6 +170,18 @@ def score_sections(
         if not ev.standalone and not any(b in index for b in ev.builds_on):
             adj.append(ScoreAdjustment(rule="needs_context", delta=-4, reason="Hard to follow on its own"))
 
+        reach = foundations.get(s.id, 0)
+        if s.kind in CONTENT_KINDS and reach:
+            bonus = round(spec.foundation_bonus * min(1.0, reach / teaching), 1)
+            if bonus >= 0.5:
+                adj.append(
+                    ScoreAdjustment(
+                        rule="foundation",
+                        delta=bonus,
+                        reason=f"{reach} later section(s) build on this; a beginner needs it first",
+                    )
+                )
+
         final = round(min(100.0, max(0.0, base[s.id] + sum(a.delta for a in adj))), 1)
         redundant = any(a.rule in ("covered_elsewhere", "lexical_overlap") for a in adj)
         if (
@@ -190,6 +205,28 @@ def score_sections(
             ScoredSection(section=s, evaluation=ev, score=breakdown, importance=classify(final, s.kind, config))
         )
     return scored
+
+
+def _foundation_reach(sections: list[Section], evaluations: dict[str, SectionEvaluation]) -> dict[str, int]:
+    """For each section, how many teaching sections build on it, directly or through
+    others (from the evaluations' `builds_on`, which only point to earlier sections)."""
+    teaching = {s.id for s in sections if s.kind in RANKED_KINDS}
+    users: dict[str, set[str]] = {s.id: set() for s in sections}
+    for s in sections:
+        for b in evaluations[s.id].builds_on:
+            if b in users and b != s.id:
+                users[b].add(s.id)
+    reach: dict[str, int] = {}
+    for s in sections:
+        seen: set[str] = set()
+        stack = list(users[s.id])
+        while stack:
+            x = stack.pop()
+            if x not in seen:
+                seen.add(x)
+                stack.extend(users[x])
+        reach[s.id] = len(seen & teaching)
+    return reach
 
 
 def _relative_scores(base: dict[str, float]) -> tuple[dict[str, float], dict[str, int]]:

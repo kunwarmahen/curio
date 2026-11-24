@@ -16,6 +16,9 @@ class ProfileSpec:
     # Score adjustments (points out of 100) by section kind, added to the base kind priors.
     kind_bias: dict[SectionKind, float] = field(default_factory=dict)
     budget_fraction: float | None = None
+    # Up to this many points for a content section that later teaching sections build
+    # on (directly or through others), in proportion to how much of the video does.
+    foundation_bonus: float = 0.0
 
 
 PROFILES: dict[LearningProfile, ProfileSpec] = {
@@ -31,6 +34,10 @@ PROFILES: dict[LearningProfile, ProfileSpec] = {
         "valuable; very advanced detail is less useful.",
         weight_multipliers={"educational_value": 1.2, "depth": 0.6, "novelty": 0.8},
         kind_bias={SectionKind.INTRO: 6, SectionKind.RECAP: 6, SectionKind.EXAMPLE: 3},
+        # The model rates "what is X and how its parts fit" below hands-on sections
+        # (Kubernetes: 77-82 vs. 85-99), and asking it to didn't help; the sections
+        # that everything else builds on are the beginner's foundations.
+        foundation_bonus=12.0,
     ),
     LearningProfile.TECHNICAL: ProfileSpec(
         label="Technical",

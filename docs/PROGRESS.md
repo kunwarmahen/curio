@@ -590,12 +590,23 @@ selection) and with re-run evaluations (prompts):
 - 4 new tests (173 in total). Saved analyses keep their scores; new analyses get all of
   this (the pipeline version isn't bumped).
 
+### Beginner foundations (2026-11-24)
+For the beginner goal, a content section gets up to +12 for the later teaching sections
+that build on it (`builds_on`, followed transitively), in proportion to the share of the
+video that depends on it, shown as "N later section(s) build on this". Offline on the
+three beginner analyses (other goals unchanged):
+- Kubernetes: "What is Kubernetes" 86 → 97 and architecture 84 → 95, both now in the
+  22-minute playlist (13 of 14 teaching sections build on the first). The trade: within
+  the same time, Deployments and the YAML configuration section (both already at the
+  100 cap) left the playlist.
+- MIT 6.006 and 3Blue1Brown: same picks; foundations score 2–10 higher.
+- 2 new tests (175 in total).
+
 ### Known gaps / next steps
 - The Anthropic provider has not been run against the live API (no credentials
   here); `curio check-claude` checks it with one tiny request.
-- Beginner foundations: the model still rates "what is X and how its parts fit"
-  below hands-on sections (Kubernetes: 77–82 vs. 85–99), so a short beginner playlist
-  can leave them out. A prompt sentence didn't help.
+- Scores are capped at 100, so with the beginner foundation bonus several top sections
+  tie at 100 and the bonus can't separate them (Kubernetes).
 - With the learner's own goal, sections the goal asks for can be marked down along with
   what they know (Lecture 1's debugging framework).
 - Course playlists still select greedily (they need repeat exclusions), so a long

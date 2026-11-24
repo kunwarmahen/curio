@@ -82,7 +82,7 @@ On the first page, paste a YouTube link and choose **what you're watching for**:
 | Goal | Picks |
 |---|---|
 | General | The most important ideas, balanced between foundations and examples |
-| Beginner | Clear foundations and definitions; intros and recaps can help |
+| Beginner | Clear foundations and definitions first, especially what the rest of the video builds on; intros and recaps can help |
 | Technical | Implementation, architecture, code and demos |
 | Executive | Strategy, trade-offs, decisions and conclusions, in less time |
 | Deep dive | Advanced ideas and expert detail; a longer playlist |

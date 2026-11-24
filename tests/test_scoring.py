@@ -202,3 +202,30 @@ def test_learner_brief_steers_ratings_for_own_goals_and_deep_dives():
     assert "already knows" not in learner_brief(LearningPreferences())
     deep = learner_brief(LearningPreferences(profile=LearningProfile.DEEP_DIVE))
     assert "framework or mental model" in deep
+
+
+def test_beginners_get_a_bonus_for_foundations_others_build_on():
+    # S00 <- S01 <- S02, S03: S00 is what everything builds on.
+    secs = [section(i) for i in range(5)]
+    evs = {s.id: ev(s.id, 7.5) for s in secs}
+    evs["S01"] = ev("S01", 7.5, builds_on=["S00"])
+    evs["S02"] = ev("S02", 7.5, builds_on=["S01"])
+    evs["S03"] = ev("S03", 7.5, builds_on=["S01"])
+    prefs = LearningPreferences(profile=LearningProfile.BEGINNER)
+    beginner = score_sections(secs, evs, prefs, ScoringConfig(weights=W))
+    bonus = {s.section.id: next((a for a in s.score.adjustments if a.rule == "foundation"), None) for s in beginner}
+    assert bonus["S00"] and "3 later section(s)" in bonus["S00"].reason
+    assert bonus["S01"] and bonus["S01"].delta < bonus["S00"].delta
+    assert bonus["S02"] is None and bonus["S04"] is None
+    general = score_sections(secs, evs, LearningPreferences(), ScoringConfig(weights=W))
+    assert not any(a.rule == "foundation" for s in general for a in s.score.adjustments)
+
+
+def test_foundation_bonus_skips_intros_and_ignores_unknown_ids():
+    secs = [section(0, SectionKind.INTRO), section(1), section(2)]
+    evs = {s.id: ev(s.id) for s in secs}
+    evs["S01"] = ev("S01", builds_on=["S00", "S99"])
+    evs["S02"] = ev("S02", builds_on=["S01", "S02"])
+    scored = score_sections(secs, evs, LearningPreferences(profile=LearningProfile.BEGINNER), ScoringConfig(weights=W))
+    assert not any(a.rule == "foundation" for a in scored[0].score.adjustments)  # an intro
+    assert any(a.rule == "foundation" for a in scored[1].score.adjustments)
