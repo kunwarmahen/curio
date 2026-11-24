@@ -494,8 +494,11 @@ general goal, so flagged), on a copy of the database:
   only the windows left, or goes straight to the overview. The last evaluation batch is
   now saved too: before, a pause at "Re-evaluating skipped sections" lost it. A pause
   now loses no finished model call (pauses are checked only between calls).
-- Not yet tried live: the GPU was in use (45%, another program's model loaded in
-  Ollama) when this was ready.
+- Real run on a copy (Lecture 1, 70 min, technical goal, outline window lowered to
+  6,000 tokens so it took 3 windows): paused at 52 s after window 2 (14 sections so
+  far, next window from block 114). The resumed run read only window 3, then the
+  overview, boundaries and evaluations: 141 s, 192.9 s of work in all, 24 sections
+  tiling the video from 0:06, no warnings, checkpoint removed at the end.
 - 1 new test (166 in total).
 
 ### README as a user guide (2026-11-24)
