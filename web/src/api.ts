@@ -167,9 +167,17 @@ export interface Notes {
   elapsed_s: number
 }
 
+export interface Citation {
+  start_s: number
+  /** In a course answer: which lecture. */
+  video_id: string
+  analysis_id: string
+  lecture: number
+}
+
 export interface AnswerPart {
   text: string
-  citations: { start_s: number }[]
+  citations: Citation[]
 }
 
 export interface Answer {
@@ -181,6 +189,21 @@ export interface Answer {
   outside_knowledge: string
   context: 'full' | 'excerpts'
   search: string
+  warnings: string[]
+  created_at: string
+  elapsed_s: number
+}
+
+export interface CourseAnswer {
+  id: string
+  course_id: string
+  question: string
+  parts: AnswerPart[]
+  in_course: boolean
+  outside_knowledge: string
+  context: 'full' | 'excerpts'
+  search: string
+  lectures: number
   warnings: string[]
   created_at: string
   elapsed_s: number
@@ -471,6 +494,14 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ minutes, force }),
     }),
+  courseConversation: (id: string) => request<CourseAnswer[]>(`/courses/${encodeURIComponent(id)}/questions`),
+  askCourse: (id: string, question: string) =>
+    request<CourseAnswer>(`/courses/${encodeURIComponent(id)}/questions`, {
+      method: 'POST',
+      body: JSON.stringify({ question }),
+    }),
+  clearCourseConversation: (id: string) =>
+    request<{ deleted: number }>(`/courses/${encodeURIComponent(id)}/questions`, { method: 'DELETE' }),
   courseWatched: (id: string) => request<string[]>(`/courses/${encodeURIComponent(id)}/watched`),
   setCourseWatched: (id: string, partKey: string, watched: boolean) =>
     request(`/courses/${encodeURIComponent(id)}/watched`, {

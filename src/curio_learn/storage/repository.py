@@ -13,6 +13,7 @@ from curio_learn.domain import (
     AnalysisStatus,
     Answer,
     CardState,
+    CourseAnswer,
     CoursePlan,
     LearningNotes,
     LearningPreferences,
@@ -28,6 +29,7 @@ from curio_learn.storage.orm import (
     Base,
     CardStateRow,
     CoursePlanRow,
+    CourseQuestionRow,
     CourseRow,
     CourseWatchedRow,
     EmbeddingRow,
@@ -771,6 +773,7 @@ class Repository:
     def delete_course(self, course_id: str) -> bool:
         with self.session() as db, db.begin():
             db.execute(delete(CourseWatchedRow).where(CourseWatchedRow.course_id == course_id))
+            db.execute(delete(CourseQuestionRow).where(CourseQuestionRow.course_id == course_id))
             db.execute(delete(CoursePlanRow).where(CoursePlanRow.course_id == course_id))
             return db.execute(delete(CourseRow).where(CourseRow.id == course_id)).rowcount > 0
 
@@ -901,3 +904,29 @@ class Repository:
                         CourseWatchedRow.course_id == course_id, CourseWatchedRow.part_key == part_key
                     )
                 )
+
+    def save_course_answer(self, answer: CourseAnswer) -> None:
+        with self.session() as db, db.begin():
+            db.add(
+                CourseQuestionRow(
+                    id=answer.id,
+                    course_id=answer.course_id,
+                    question=answer.question,
+                    answer_json=answer.model_dump(mode="json"),
+                    created_at=answer.created_at,
+                )
+            )
+
+    def list_course_answers(self, course_id: str) -> list[CourseAnswer]:
+        """The conversation about a course, oldest first."""
+        with self.session() as db:
+            rows = db.scalars(
+                select(CourseQuestionRow)
+                .where(CourseQuestionRow.course_id == course_id)
+                .order_by(CourseQuestionRow.created_at)
+            )
+            return [CourseAnswer.model_validate(r.answer_json) for r in rows]
+
+    def clear_course_answers(self, course_id: str) -> int:
+        with self.session() as db, db.begin():
+            return db.execute(delete(CourseQuestionRow).where(CourseQuestionRow.course_id == course_id)).rowcount

@@ -337,9 +337,13 @@ class LearningNotes(BaseModel):
 
 
 class Citation(BaseModel):
-    """Where the video says it: the start of the best-matching sentence (a real cue time)."""
+    """Where the video says it: the start of the best-matching sentence (a real cue time).
+    In a course answer, also which lecture."""
 
     start_s: float
+    video_id: str = ""
+    analysis_id: str = ""
+    lecture: int = 0  # position in the course; 0 outside a course
 
 
 class AnswerPart(BaseModel):
@@ -565,3 +569,21 @@ class Course(BaseModel):
     @property
     def url(self) -> str:
         return f"https://www.youtube.com/playlist?list={self.playlist_id}" if self.playlist_id else ""
+
+
+class CourseAnswer(BaseModel):
+    """An answer from every lecture of a course, citing moments in specific lectures."""
+
+    id: str
+    course_id: str
+    question: str
+    parts: list[AnswerPart] = Field(default_factory=list)
+    in_course: bool = True  # False when no lecture addresses the question
+    outside_knowledge: str = ""
+    context: str = "excerpts"  # "full": every lecture's whole transcript; "excerpts": search hits
+    search: str = ""
+    lectures: int = 0  # lectures searched
+    warnings: list[str] = Field(default_factory=list)
+    llm: LLMInfo | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    elapsed_s: float = 0.0

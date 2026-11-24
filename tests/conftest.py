@@ -221,6 +221,20 @@ class FakeLLM:
                     ]
                 }
             )
+        if name == "CourseAnswerOut":
+            import re
+
+            shown = [int(n) for n in re.findall(r"^\[(\d+) \| ", shared_prefix, re.M)]
+            return json.dumps(
+                {
+                    "parts": [
+                        {"text": "Both lectures explain idea0.", "passages": [shown[0], shown[-1], 99999]},
+                        {"text": "Nothing else.", "passages": []},
+                    ],
+                    "in_course": True,
+                    "outside_knowledge": "",
+                }
+            )
         if name == "AnswerOut":
             import re
 

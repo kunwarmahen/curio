@@ -157,3 +157,80 @@ def test_api_course_flow(service):
         assert client.post("/api/v1/courses", json={"url": "https://youtu.be/aaaaaaaaaaa"}).status_code == 422
         assert client.delete(f"/api/v1/courses/{course_id}").status_code == 200
         assert client.get(f"/api/v1/courses/{course_id}").status_code == 404
+
+
+def test_queue_rebuilds_the_course_after_its_last_lecture(service):
+    from curio_learn.api.app import _run_queued
+    from curio_learn.overnight import QueueWorker
+
+    analyze(service, VIDS[0])
+    analyze(service, VIDS[1], LearningPreferences())  # used meanwhile; queued again for the course goal
+    course_id = service.import_course(PLAYLIST, TECH)
+    service.queue_course(course_id)
+    service.course_plan(course_id, minutes=10)
+    worker = QueueWorker(service.repo, window=None, probe=None, active=lambda: False, start=lambda _: None)
+
+    # One queued lecture finishes while another still waits: no rebuild yet.
+    second = service.course(course_id).lectures[1].pending_id
+    service.repo.claim_queued(second)
+    _run_queued(service, second, worker)
+    course = service.course(course_id)
+    assert course.plan_stale and course.lectures[2].state is LectureState.QUEUED
+
+    # The last one finishes: the course playlist is rebuilt with the same length.
+    third = course.lectures[2].pending_id
+    service.repo.claim_queued(third)
+    _run_queued(service, third, worker)
+    course = service.course(course_id)
+    assert not course.plan_stale and course.plan.status is AnalysisStatus.DONE
+    assert course.plan.analysis_ids == [lec.analysis_id for lec in course.lectures]
+    assert course.plan.budget_s == 600 and second in course.plan.analysis_ids
+
+
+def test_rebuild_is_skipped_when_the_gpu_is_busy(service):
+    a, b = analyze(service, VIDS[0]), analyze(service, VIDS[1])
+    course_id = service.group_course("", [a, b])
+    assert service.rebuild_courses_after(b, gpu_busy=lambda: "The GPU is in use.") == []
+    assert service.course(course_id).plan.status is AnalysisStatus.FAILED
+    assert len(service.rebuild_courses_after(b)) == 1
+    assert service.course(course_id).plan.status is AnalysisStatus.DONE
+
+
+def test_ask_the_course_cites_moments_in_lectures(service):
+    from curio_learn.analysis.course_ask import LectureText, course_passages, named_lectures
+
+    a, b = analyze(service, VIDS[0]), analyze(service, VIDS[1])
+    course_id = service.import_course(PLAYLIST, TECH)
+    service.queue_course(course_id)
+    service.settings.ask_context_tokens = 800  # force search over excerpts
+    answer = service.ask_course(course_id, "What do the lectures say about idea0?")
+    assert answer.in_course and answer.lectures == 2 and answer.context == "excerpts"
+    cites = answer.parts[0].citations
+    assert {c.analysis_id for c in cites} <= {a, b} and all(c.lecture in (1, 2) for c in cites)
+    assert any("Ignored 1 citation" in w for w in answer.warnings)
+    assert any("searched all 2 lectures" in w for w in answer.warnings)
+    # Every timestamp is a real cue start.
+    starts = {c.start_s for c in service.repo.get_transcript(VIDS[0]).cues}
+    assert all(c.start_s in starts for c in cites)
+    assert [x.id for x in service.course_conversation(course_id)] == [answer.id]
+
+    course = service.course(course_id)
+    texts = service._course_texts(course)
+    assert [t.label for t in texts] == ["Lecture 1", "Lecture 2"]
+    assert len(course_passages(texts)) == sum(len(t.blocks) for t in texts)
+    assert named_lectures("What does lecture 2 say?", texts) == [texts[1]]
+    guest = LectureText(3, "Guest lecture", texts[0].analysis, [], [])
+    assert named_lectures("and the guest lecture?", [*texts, guest]) == [guest]
+    assert service.clear_course_conversation(course_id) == 1
+
+
+def test_api_ask_the_course(service):
+    analyze(service, VIDS[0])
+    course_id = service.import_course(PLAYLIST, TECH)
+    service.queue_course(course_id)
+    with TestClient(create_app(service)) as client:
+        r = client.post(f"/api/v1/courses/{course_id}/questions", json={"question": "What is idea0?"})
+        assert r.status_code == 200 and r.json()["parts"][0]["citations"][0]["video_id"] == VIDS[0]
+        assert len(client.get(f"/api/v1/courses/{course_id}/questions").json()) == 1
+        assert client.delete(f"/api/v1/courses/{course_id}/questions").json() == {"deleted": 1}
+        assert client.post("/api/v1/courses/nope/questions", json={"question": "x"}).status_code == 404

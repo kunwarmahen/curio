@@ -7,7 +7,9 @@ import {
   type CoursePart,
   type CoursePlan,
   type CourseRef,
+  type Citation,
 } from '../api'
+import { AskThread } from '../components/Ask'
 import { Player, type Clip } from '../components/Player'
 import { IMPORTANCE_LABEL, PROFILES, clock, duration, shortTitle } from '../format'
 import { BackLink } from '../components/Logo'
@@ -77,6 +79,21 @@ export function CoursePage({ id }: { id: string }) {
         </p>
       )}
       <PlanSection course={course} onChange={reload} />
+      {course.plan?.status !== 'done' && course.lectures.some((l) => l.analysis_id) && (
+        <CourseAsk
+          course={course}
+          citation={(c) => (
+            <a
+              className="timelink"
+              href={`https://www.youtube.com/watch?v=${c.video_id}&t=${Math.floor(c.start_s)}s`}
+              target="_blank"
+              rel="noreferrer"
+            >
+              {lectureLabel(course, c.lecture)}, {clock(c.start_s)}
+            </a>
+          )}
+        />
+      )}
       <Lectures course={course} onChange={reload} />
     </main>
   )
@@ -230,7 +247,12 @@ function CoursePlayer({ course, plan }: { course: Course; plan: CoursePlan }) {
   }, [])
 
   const playRef = (ref: CourseRef) => {
-    const part = parts.find((p) => p.video_id === ref.video_id && p.section_ids.includes(ref.section_id)) ?? null
+    const part =
+      parts.find(
+        (p) =>
+          p.video_id === ref.video_id &&
+          (p.section_ids.includes(ref.section_id) || (p.start_s <= ref.start_s && ref.start_s < p.end_s)),
+      ) ?? null
     setNow({ part, ref: part ? null : ref })
     setClip((c) => ({
       key: `${ref.video_id}:${ref.section_id}`,
@@ -242,6 +264,16 @@ function CoursePlayer({ course, plan }: { course: Course; plan: CoursePlan }) {
     }))
     const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches
     document.querySelector('.watch')?.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'start' })
+  }
+
+  /** A moment an answer cites: to the end of the course part around it, or 3 minutes. */
+  const playAt = (c: Citation) => {
+    const part = parts.find((p) => p.video_id === c.video_id && p.start_s <= c.start_s && c.start_s < p.end_s)
+    playRef(
+      part
+        ? { lecture: c.lecture, video_id: c.video_id, analysis_id: c.analysis_id, section_id: part.section_ids[0], title: part.title, start_s: c.start_s, end_s: part.end_s }
+        : { lecture: c.lecture, video_id: c.video_id, analysis_id: c.analysis_id, section_id: `t${c.start_s}`, title: '', start_s: c.start_s, end_s: c.start_s + 180 },
+    )
   }
 
   const setPartWatched = (key: string, value: boolean) => {
@@ -364,7 +396,7 @@ function CoursePlayer({ course, plan }: { course: Course; plan: CoursePlan }) {
               <p className="course__from">
                 {label(now.ref.lecture)}: {shortTitle(lectures.get(now.ref.lecture)?.title ?? '')}
               </p>
-              <h2 className="now__title">{now.ref.title}</h2>
+              <h2 className="now__title">{now.ref.title || `From ${clock(now.ref.start_s)}`}</h2>
               <p className="muted">
                 {clock(now.ref.start_s)}–{clock(now.ref.end_s)}. Not in the course playlist.
               </p>
@@ -442,6 +474,20 @@ function CoursePlayer({ course, plan }: { course: Course; plan: CoursePlan }) {
         </section>
       )}
 
+      <CourseAsk
+        course={course}
+        citation={(c) => (
+          <button
+            type="button"
+            className="timelink"
+            onClick={() => playAt(c)}
+            aria-label={`Play ${label(c.lecture)} from ${clock(c.start_s)}`}
+          >
+            {label(c.lecture)}, {clock(c.start_s)}
+          </button>
+        )}
+      />
+
       {plan.repeats.length > 0 && (
         <section className="course__section" aria-labelledby="repeats-heading">
           <h2 id="repeats-heading">Left out: taught in another lecture</h2>
@@ -474,6 +520,41 @@ function CoursePlayer({ course, plan }: { course: Course; plan: CoursePlan }) {
         </details>
       )}
     </>
+  )
+}
+
+function lectureLabel(course: Course, position: number): string {
+  return course.lectures.find((l) => l.position === position)?.label ?? `#${position}`
+}
+
+/** Ask the course: questions answered from every analyzed lecture. */
+function CourseAsk({ course, citation }: { course: Course; citation: (c: Citation) => React.ReactNode }) {
+  const id = course.id
+  const analyzed = course.lectures.filter((l) => l.analysis_id).length
+  const load = useMemo(
+    () => () => api.courseConversation(id).then((list) => list.map((a) => ({ ...a, covered: a.in_course }))),
+    [id],
+  )
+  const goal = course.preferences.custom_objective
+  return (
+    <section className="course__section" aria-labelledby="ask-course-heading">
+      <h2 id="ask-course-heading">Ask the course</h2>
+      <AskThread
+        subject="course"
+        intro={`Ask anything about the course. Curio searches all ${analyzed} analyzed lectures and answers from their transcripts, citing the moment in each lecture. Name a lecture ("in lecture 6…") to look there first.`}
+        waiting="Searching every lecture and reading what it found… This takes up to a minute with a local model."
+        suggestions={[
+          'Which lectures talk about evaluating agents, and what do they warn about?',
+          'What does the course say about context management, across lectures?',
+          goal ? 'What would someone who has built agents most likely have missed here?' : 'What are the main ideas of the course?',
+          'Where do two lectures disagree or give different advice?',
+        ]}
+        load={load}
+        send={(q) => api.askCourse(id, q).then((a) => ({ ...a, covered: a.in_course }))}
+        clear={() => api.clearCourseConversation(id)}
+        citation={citation}
+      />
+    </section>
   )
 }
 

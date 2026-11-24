@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 
 from curio_learn.analysis.ask import answer_question
 from curio_learn.analysis.course import Lecture, build_course_plan
+from curio_learn.analysis.course_ask import LectureText, answer_course_question, course_passages
 from curio_learn.analysis.notes import generate_notes, scope_key, scope_sections, to_markdown
 from curio_learn.analysis.pipeline import AnalysisPipeline
 from curio_learn.analysis.playlist import PlaylistConfig
@@ -22,6 +23,7 @@ from curio_learn.domain import (
     CardGrade,
     CardState,
     Course,
+    CourseAnswer,
     CourseLecture,
     CoursePlan,
     DueCard,
@@ -899,6 +901,142 @@ class CurioService:
                 return saved
             plan_id, _ = self.submit_course_plan(course_id, minutes, force=True)
         return self.run_course_plan(plan_id, progress)
+
+    def rebuild_courses_after(self, analysis_id: str, *, gpu_busy: Callable[[], str] = lambda: "") -> list[str]:
+        """After the queue analyzed a lecture: rebuild the course playlist of every course
+        it's in once none of that course's lectures is still waiting, with the length
+        chosen last (the default when none was built). Returns the plans built."""
+        analysis = self.repo.get_analysis(analysis_id)
+        if analysis is None or analysis.status != AnalysisStatus.DONE:
+            return []
+        built = []
+        for data in self.repo.list_courses():
+            if all(x["video_id"] != analysis.video.video_id for x in data["lectures"]):
+                continue
+            course = self.course(data["id"])
+            if course is None or course.importing:
+                continue
+            if any(
+                lec.state in (LectureState.QUEUED, LectureState.ANALYZING) or lec.pending_id for lec in course.lectures
+            ):
+                continue  # the queue's last lecture of this course rebuilds it
+            last = course.plan if course.plan and course.plan.status == AnalysisStatus.DONE else None
+            minutes = round(last.budget_s / 60) if last else None
+            try:
+                plan_id, needs_run = self.submit_course_plan(course.id, minutes)
+            except AnalysisError:
+                continue  # fewer than two analyzed lectures
+            if not needs_run:
+                continue
+            reason = gpu_busy()
+            if reason:
+                log.info("[course %s] Not rebuilding the course playlist overnight: %s", course.id, reason)
+                self.repo.update_course_plan_status(plan_id, AnalysisStatus.FAILED, error=f"Skipped: {reason}")
+                continue
+            try:
+                self.run_course_plan(plan_id)
+                built.append(plan_id)
+            except Exception:  # recorded on the plan
+                log.warning("[course %s] Rebuilding the course playlist failed", course.id, exc_info=True)
+        return built
+
+    # ------------------------------------------------------ ask the course
+
+    def _course_texts(self, course: Course) -> list[LectureText]:
+        out = []
+        for lec in course.lectures:
+            analysis = self.repo.get_analysis(lec.analysis_id) if lec.analysis_id else None
+            transcript = self.repo.get_transcript(lec.video_id) if analysis else None
+            if analysis is None or transcript is None:
+                continue
+            out.append(
+                LectureText(
+                    position=lec.position,
+                    label=lec.label,
+                    analysis=analysis,
+                    blocks=build_blocks(transcript.cues),
+                    units=boundary_units(transcript.cues),
+                )
+            )
+        return out
+
+    def _course_ranker(self, lectures: list[LectureText]) -> tuple[Callable[[str], list[int]], list[str]]:
+        """Search over every lecture's blocks at once: keyword, plus embeddings when every
+        lecture has (or gets) its vectors."""
+        blocks = [p.block for p in course_passages(lectures)]
+        emb = self.embedder
+        vectors: list[list[float]] | None = None
+        if emb is not None:
+            try:
+                vectors = []
+                for lec in lectures:
+                    key = blocks_key(lec.blocks)
+                    vid = lec.analysis.video.video_id
+                    vecs = self.repo.get_embeddings(vid, emb.name, key)
+                    if vecs is None:
+                        vecs = emb.embed([b.text for b in lec.blocks], kind="document")
+                        self.repo.save_embeddings(vid, emb.name, key, vecs)
+                    vectors.extend(vecs)
+            except Exception as exc:  # embeddings are an optional improvement
+                log.warning("Embedding search unavailable for the course (%s); using keyword search", exc)
+                vectors = None
+        kinds = ["keyword"] + (["semantic"] if vectors else [])
+
+        def ranked(query: str) -> list[int]:
+            qv = None
+            if vectors:
+                try:
+                    qv = emb.embed([query], kind="query")[0]
+                except Exception as exc:
+                    log.warning("Query embedding failed (%s); using keyword search", exc)
+            return rank(query, blocks, query_vector=qv, block_vectors=vectors)
+
+        return ranked, kinds
+
+    def ask_course(self, course_id: str, question: str) -> CourseAnswer:
+        """Answer a question from every analyzed lecture of a course and save it."""
+        if not question.strip():
+            raise AnalysisError("Ask a question about the course.")
+        course = self.course(course_id)
+        if course is None:
+            raise KeyError(course_id)
+        lectures = self._course_texts(course)
+        if not lectures:
+            raise AnalysisError("Questions can be asked once a lecture has been analyzed.")
+        history = self.repo.list_course_answers(course_id)
+        s = self.settings
+        if s.ask_context_tokens:
+            budget = s.ask_context_tokens
+        elif self.llm.name == "anthropic":
+            budget = 150000
+        else:
+            outline = sum(len(lec.analysis.sections) * 12 + 20 for lec in lectures)
+            convo = sum(approx_tokens(a.question + " ".join(p.text for p in a.parts)) + 20 for a in history[-4:])
+            budget = max(2000, s.ollama_num_ctx - 2500 - 900 - outline - convo - 600)
+        total = sum(approx_tokens(b.text) + 8 for lec in lectures for b in lec.blocks)
+        ranked, kinds = self._course_ranker(lectures) if total > budget else (lambda _: [], [])
+        answer = answer_course_question(
+            self.llm,
+            model=s.model_for("ask"),
+            course_id=course_id,
+            course_title=course.title,
+            prefs=course.preferences,
+            lectures=lectures,
+            question=question,
+            history=history,
+            budget_tokens=budget,
+            ranked=ranked,
+            search="+".join(kinds),
+            retries=s.llm_max_retries,
+        )
+        self.repo.save_course_answer(answer)
+        return answer
+
+    def course_conversation(self, course_id: str) -> list[CourseAnswer]:
+        return self.repo.list_course_answers(course_id)
+
+    def clear_course_conversation(self, course_id: str) -> int:
+        return self.repo.clear_course_answers(course_id)
 
     def course_watched(self, course_id: str) -> set[str]:
         return self.repo.course_watched(course_id)

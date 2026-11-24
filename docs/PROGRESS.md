@@ -12,7 +12,7 @@
 | LAN access | ✅ app and Podman container listen on all interfaces by default |
 | Phase 3: Interactive learning | 🟡 Ask the Video, quizzes and flashcards with spaced repetition, a remembered default goal, and segment completion tracking; saved custom playlists are not built |
 | Overnight queue | ✅ queue videos any time; analyzed 1–7 AM while the GPU is idle |
-| Phase 4: Multi-video intelligence | 🟡 courses from YouTube playlists, one course playlist across lectures without repeats, and an "easy to miss" checklist; cross-course search and curricula are not built |
+| Phase 4: Multi-video intelligence | 🟡 courses from YouTube playlists, one course playlist across lectures without repeats, an "easy to miss" checklist, and Ask the course; curricula across courses are not built |
 
 ## Phase 1 log (2026-11-23)
 
@@ -33,7 +33,7 @@
 - `storage`: SQLAlchemy/SQLite (videos, transcripts, analyses, segments),
   cache keyed by video + preferences + model + pipeline version.
 - `service`, FastAPI (`/api/v1`), CLI. (A Streamlit UI was built first and then replaced; see the UI log below.)
-- 98 offline tests at the end of Phase 1 (105 with notes, 115 with Ask the Video, 121 with the overnight queue, 131 with quizzes, flashcards and the default goal, 134 with overnight notes and quizzes, 140 with courses) (ad detection and carving, sentence units and boundary refinement, URL parsing, normalization, segmentation repair, scoring and
+- 98 offline tests at the end of Phase 1 (105 with notes, 115 with Ask the Video, 121 with the overnight queue, 131 with quizzes, flashcards and the default goal, 134 with overnight notes and quizzes, 140 with courses, 144 with Ask the course) (ad detection and carving, sentence units and boundary refinement, URL parsing, normalization, segmentation repair, scoring and
   calibration, playlist and prerequisites, validation, LLM retry, request shapes and
   truncation guard, service caching, stale runs, API).
 
@@ -392,6 +392,20 @@ general goal, so flagged), on a copy of the database:
   on YouTube (YouTube errors 101/150).
 - 6 new tests (140 in total).
 
+### Ask the course, and course playlists rebuilt overnight (2026-11-24)
+- The queue rebuilds a course's playlist after its last waiting lecture (with the
+  last length used), checking the GPU first.
+- Ask the course: questions answered from all lectures at once, citing moments in
+  each (ARCHITECTURE §13). The Ask conversation component is now shared by the video
+  and course pages.
+- Tried on 7 CS329Z lectures: "how to evaluate agents, and the pitfalls" drew on 5
+  lectures (project rigor in Lecture 3, pass^k and AST matching in 4, memory
+  benchmarks in 7, CooperBench in 8, metrics in 9); "in lecture 6, observation
+  masking vs compaction" stayed in Lecture 6. 40 s each; checked claims were in the
+  transcripts. The GPU was shared with an analysis running in the container at the
+  time.
+- 4 new tests (144 in total).
+
 ### Known gaps / next steps
 - The Anthropic provider is covered by unit tests with a mocked client only.
   No API key was available, so it has not been run against the live API yet.
@@ -400,8 +414,7 @@ general goal, so flagged), on a copy of the database:
 - Overnight queue, possible next step: pause between videos when someone starts using the GPU mid-run (today a running
   analysis finishes).
 - Phase 3, still to build: saved custom playlists.
-- Courses: rebuild the course playlist automatically when the queue finishes a
-  course's last lecture; reorder lectures by hand; search across a course.
+- Courses: reorder lectures by hand; flashcards from the "easy to miss" checklist.
 - Quizzes: the right answer is still too often the longest option. Options: a
   code-side retry for questions with a clear gap, or asking for the options in a
   fixed length band from the start.

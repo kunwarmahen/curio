@@ -83,6 +83,7 @@ curio/
 │   │   ├── ask.py            Ask the Video: context selection, grounded answers
 │   │   ├── study.py          quizzes and flashcards, spaced-repetition schedule
 │   │   ├── course.py         course playlist across lectures: repeats, checklist
+│   │   ├── course_ask.py     Ask the course: search across lectures, cited answers
 │   │   └── pipeline.py       orchestrates the steps, reports progress
 │   ├── storage/
 │   │   ├── orm.py            SQLAlchemy tables
@@ -190,6 +191,8 @@ invent a timestamp: code converts the numbers to the original cue times.
 | `DELETE` | `/courses/{id}` | delete a course (its analyses stay) |
 | `POST` | `/courses/{id}/refresh` | read the playlist again and queue new lectures |
 | `POST` | `/courses/{id}/plan` | `{minutes?, force?}` → `202 {plan_id, status}`: build the course playlist from the lectures analyzed so far, on the job worker |
+| `POST` | `/courses/{id}/questions` | `{question}` → `CourseAnswer` (synchronous; citations carry `video_id`, `analysis_id`, `lecture`) |
+| `GET`  | `/courses/{id}/questions` / `DELETE` | the course conversation, oldest first / clear it |
 | `GET`  | `/courses/{id}/watched` / `PUT` | watched course parts (`PUT` body `{part_key, watched}`) |
 | `POST` | `/queue/preferences` | `{preferences, analysis_ids?, save_default?}` → `{updated[], already_analyzed[]}`: give queued videos a goal (all queued when no ids); a video already analyzed with that goal leaves the queue |
 
@@ -464,6 +467,23 @@ context engineering (2 and 6), skills (6 and 7). The first prompt also called
 saying that one shared point isn't a repeat fixed it. Checklist claims checked
 against the transcripts (reader accuracy saturating after 10–20 documents; memory
 agents scoring worst on MemoryArena) were in the lectures.
+
+**Rebuilt overnight.** After a queued lecture's notes and quiz, the job calls
+`rebuild_courses_after`: every course with that video and no lecture still queued or
+running is rebuilt with its last plan's length (the default when none was built),
+after another GPU check. A skipped rebuild is recorded as a failed plan with the reason.
+
+**Ask the course** (`analysis/course_ask.py`). The blocks of every analyzed lecture are
+numbered across the course (`[n | Lecture 3, m:ss]`), and the outline lists each
+lecture's section titles. With Ollama's 32k context a course never fits, so the
+course-wide ranker (BM25 and `nomic-embed-text` over all blocks at once, fused by
+reciprocal rank; each lecture's vectors are the ones Ask the Video stores) orders the
+passages, and Ask's `select_context` adds them with neighbours until the budget is
+full (about 25k tokens: some 250 of 1,400 passages for CS329Z). Lectures the question
+names come first, and a time it names in one lecture is read first. Citations become
+sentence starts in that lecture (`precise_start`). On CS329Z: about 40 s an answer;
+the claims checked ("a demo that works once … will not score highly", observation
+masking and compaction "very similar" in solve rate) were in the transcripts.
 
 **Playback.** One YouTube player; a clip names its video, so the course plays parts
 of several lectures in a row. Watched parts are stored per course by

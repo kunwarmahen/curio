@@ -1871,3 +1871,6 @@ button.stretch:hover,
     line-height: 1.15;
   }
 }
+.course__section .ask {
+  margin-top: 1rem;
+}

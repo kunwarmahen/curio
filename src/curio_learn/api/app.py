@@ -22,6 +22,7 @@ from curio_learn.domain import (
     CardGrade,
     CardState,
     Course,
+    CourseAnswer,
     FlashcardDeck,
     LearningNotes,
     LearningPreferences,
@@ -390,6 +391,23 @@ def create_app(service: CurioService | None = None) -> FastAPI:
         current = s.repo.get_course_plan(plan_id)
         return PlanAccepted(plan_id=plan_id, status=current.status if current else AnalysisStatus.PENDING)
 
+    @app.post("/api/v1/courses/{course_id}/questions", response_model=CourseAnswer)
+    def ask_course(course_id: str, body: AskRequest, request: Request):
+        try:
+            return svc(request).ask_course(course_id, body.question)
+        except KeyError:
+            raise HTTPException(404, {"code": "not_found", "message": "Unknown course id"}) from None
+        finally:
+            request.app.state.queue.touch()
+
+    @app.get("/api/v1/courses/{course_id}/questions", response_model=list[CourseAnswer])
+    def course_conversation(course_id: str, request: Request):
+        return svc(request).course_conversation(course_id)
+
+    @app.delete("/api/v1/courses/{course_id}/questions")
+    def clear_course_conversation(course_id: str, request: Request):
+        return {"deleted": svc(request).clear_course_conversation(course_id)}
+
     @app.get("/api/v1/courses/{course_id}/watched", response_model=list[str])
     def course_watched(course_id: str, request: Request):
         return sorted(svc(request).course_watched(course_id))
@@ -518,6 +536,9 @@ def _run_queued(service: CurioService, analysis_id: str, worker: QueueWorker) ->
     if service.settings.queue_prepare:
         written = service.prepare(analysis_id, gpu_busy=worker.gpu_busy)
         log.info("Queue prepared %s for analysis %s", ", ".join(written) or "nothing new", analysis_id)
+        plans = service.rebuild_courses_after(analysis_id, gpu_busy=worker.gpu_busy)
+        if plans:
+            log.info("Queue rebuilt %d course playlist(s) after analysis %s", len(plans), analysis_id)
 
 
 def _queue_course_safely(service: CurioService, course_id: str) -> None:

@@ -27,7 +27,8 @@ GPU is free. **Quizzes and flashcards** (with spaced repetition) test what a vid
 teaches. From Phase 4, **courses**: paste a YouTube playlist and Curio queues its
 lectures and builds one playlist from the best parts of all of them, leaving out
 what one lecture teaches again from another, with a checklist of what's easy to miss
-for your goal. See
+for your goal, and **Ask the course** answers questions from every lecture at once,
+citing the moment in each lecture. See
 [docs/PROGRESS.md](docs/PROGRESS.md) for details and
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design.
 
@@ -134,6 +135,11 @@ budget (about 15 minutes a lecture by default), skips parts another lecture alre
 teaches, and plays them in lecture order in one player. Its **Easy to miss** list
 gives 8–12 points from the course for your goal, each linked to the lecture moment
 that teaches it. Build it again when more lectures are analyzed; the page says when.
+The overnight queue does this itself: when it finishes a course's last waiting
+lecture, it rebuilds the course playlist with the length you chose last. **Ask the
+course** searches every analyzed lecture's transcript (keywords and embeddings) and
+answers from what it finds, saying which lecture says what, with a timestamp into each
+lecture. Name a lecture ("in lecture 6…", "the guest lecture") to look there first.
 
 `curio analyze` prints the playlist and, with `--json out.json`, writes the full
 analysis. Results are cached in `data/curio.db`. Pass `--force` to re-analyze.
@@ -211,7 +217,7 @@ most important ones:
 | `CURIO_EMBED_MODEL` | `nomic-embed-text` | Ollama embedding model for searching long transcripts; empty = keyword search only |
 | `CURIO_QUEUE_HOURS` | `1-7` | local hours when queued videos are analyzed (`22:30-6` crosses midnight); empty = any time the GPU is idle |
 | `CURIO_QUEUE_GPU_BUSY_PERCENT` | `20` | GPU utilization at which the queue waits |
-| `CURIO_QUEUE_PREPARE` | `true` | after each queued video, also write its playlist notes and quiz |
+| `CURIO_QUEUE_PREPARE` | `true` | after each queued video, also write its playlist notes and quiz, and rebuild the course playlist when it was a course's last waiting lecture |
 | `CURIO_QUEUE_CHECK_S` | `60` | how often the server checks the queue; `0` turns the queue worker off |
 | `CURIO_OLLAMA_DEFAULT_MODEL` | `qwen3.8-64k` | local model |
 | `CURIO_OLLAMA_NUM_CTX` | `32768` | context size for every Ollama call (fixed, so the model loads once) |
@@ -274,6 +280,11 @@ most important ones:
     course under one budget: once one half of a repeat is chosen, the other is ruled
     out. A last call writes the checklist from the course outline; points that cite
     no real section are dropped.
+14. **Ask the course (LLM, on request):** every lecture's transcript blocks, numbered
+    across the course. Search (BM25 plus embeddings, fused) picks passages with their
+    neighbours to fill the context; a lecture the question names is searched first.
+    Answer parts cite passage numbers, which code turns into a sentence start in that
+    lecture.
 
 ## Tests
 

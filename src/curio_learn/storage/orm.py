@@ -211,3 +211,15 @@ class CourseWatchedRow(Base):
 
     course_id: Mapped[str] = mapped_column(ForeignKey("courses.id", ondelete="CASCADE"), primary_key=True)
     part_key: Mapped[str] = mapped_column(String(48), primary_key=True)
+
+
+class CourseQuestionRow(Base):
+    """One question and its answer, in the conversation about a course."""
+
+    __tablename__ = "course_questions"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    course_id: Mapped[str] = mapped_column(ForeignKey("courses.id", ondelete="CASCADE"), index=True)
+    question: Mapped[str] = mapped_column(Text)
+    answer_json: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)

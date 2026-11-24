@@ -82,6 +82,7 @@ class Settings(BaseSettings):
     # How often the API server checks the queue, in seconds. 0 turns the queue worker off.
     queue_check_s: float = 60.0
     # After each queued analysis, also write playlist notes and a quiz with flashcards,
+    # and rebuild the course playlist of a course whose last waiting lecture this was,
     # so they're ready in the morning (skipped if someone starts using the GPU).
     queue_prepare: bool = True
 
