@@ -108,6 +108,10 @@ def test_course_plan_skips_repeats_and_cites_real_sections(service):
     # Parts play in lecture order; keys are stable.
     assert [p.lecture for p in plan.parts] == sorted(p.lecture for p in plan.parts)
     assert all(p.key == f"{p.video_id}@{int(p.start_s)}" for p in plan.parts)
+    # Every judged pair is kept, closest first, with its verdict and whether each half plays.
+    assert plan.pairs and plan.pairs[0].relation == "repeat" and plan.pairs[1].relation == "overlap"
+    assert plan.pairs[0].a_in_playlist != plan.pairs[0].b_in_playlist
+    assert [p.similarity for p in plan.pairs] == sorted((p.similarity for p in plan.pairs), reverse=True)
     # One checklist point cited a section that doesn't exist and was dropped.
     assert len(plan.checklist) == 1 and plan.checklist[0].refs
     assert any("Dropped 1 checklist point" in w for w in plan.warnings)
@@ -234,3 +238,59 @@ def test_api_ask_the_course(service):
         assert len(client.get(f"/api/v1/courses/{course_id}/questions").json()) == 1
         assert client.delete(f"/api/v1/courses/{course_id}/questions").json() == {"deleted": 1}
         assert client.post("/api/v1/courses/nope/questions", json={"question": "x"}).status_code == 404
+
+
+def test_course_practice_quiz_and_cards(service):
+    a, b = analyze(service, VIDS[0]), analyze(service, VIDS[1])
+    course_id = service.group_course("", [a, b])
+    with pytest.raises(AnalysisError):
+        service.submit_course_practice(course_id)  # no course playlist yet
+    plan = service.course_plan(course_id, minutes=10)
+    assert service.course_practice(course_id).status is None
+
+    to_run = service.submit_course_practice(course_id)
+    assert len(to_run) == len({p.analysis_id for p in plan.parts})
+    practice = service.run_course_practice(course_id, to_run)
+    assert practice.status is AnalysisStatus.DONE and not practice.stale
+    sections = {
+        aid: [sid for p in plan.parts if p.analysis_id == aid for sid in p.section_ids] for aid in plan.analysis_ids
+    }
+    for item in practice.sets:
+        st = item.study
+        assert st.scope.value == "course" and st.course_id == course_id
+        assert st.segment_ids == sections[st.analysis_id]
+        # One question per section at most, and only from the course playlist's sections.
+        assert len(st.questions) <= len(st.segment_ids)
+        assert {q.section_id for q in st.questions} <= set(st.segment_ids)
+    # The checklist point became a card whose back is the point itself.
+    point = plan.checklist[0]
+    cards = [c for it in practice.sets for c in it.study.cards if c.id.startswith("m")]
+    assert [(c.front, c.back) for c in cards] == [("What is point 1?", point.text)]
+    assert practice.cards == sum(len(it.study.cards) for it in practice.sets)
+
+    # Reused, and the course's cards are their own deck beside the lectures' own.
+    assert service.submit_course_practice(course_id) == []
+    deck = service.flashcards(course_id=course_id)
+    assert deck.total == practice.cards
+    service.study(a)  # the lecture's own playlist set
+    assert service.flashcards().total == practice.cards + len(service.list_study(a)[0].cards)
+
+    # A rebuilt course playlist with other parts makes the practice stale.
+    service.course_plan(course_id, minutes=20)
+    assert service.course_practice(course_id).stale
+
+
+def test_api_course_practice(service):
+    from curio_learn.api.app import _run_course_practice_safely
+
+    a, b = analyze(service, VIDS[0]), analyze(service, VIDS[1])
+    course_id = service.group_course("", [a, b])
+    service.course_plan(course_id, minutes=10)
+    with TestClient(create_app(service)) as client:
+        r = client.post(f"/api/v1/courses/{course_id}/practice", json={})
+        assert r.status_code == 202
+        to_run = [x["study"]["id"] for x in r.json()["sets"] if x["study"]["status"] != "done"]
+        _run_course_practice_safely(service, course_id, to_run)
+        body = client.get(f"/api/v1/courses/{course_id}/practice").json()
+        assert body["status"] == "done" and body["questions"] > 0
+        assert client.get(f"/api/v1/flashcards?course_id={course_id}").json()["total"] == body["cards"]

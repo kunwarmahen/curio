@@ -9,11 +9,8 @@ import {
   type QueueStatus,
   type RecentVideo,
 } from '../api'
-import { CourseList } from '../components/Courses'
-import { Wordmark } from '../components/Logo'
-import { QueueList } from '../components/Queue'
-import { WatchMap } from '../components/WatchMap'
-import { PROFILES, duration, isPlaylistLink, playlistOfVideo, queueHours } from '../format'
+import { VideoList } from '../components/VideoList'
+import { PROFILES, isPlaylistLink, playlistOfVideo, queueHours } from '../format'
 import { linkProps, navigate } from '../router'
 
 const WATCH_TIMES = [10, 15, 20, 30, 45]
@@ -113,7 +110,6 @@ export function Home() {
   return (
     <main className="home">
       <header className="home__intro">
-        <Wordmark />
         <h1>Find the parts of a long video worth your time.</h1>
         <p className="lede">
           Paste a lecture, talk or podcast from YouTube. Curio reads the whole transcript and builds a
@@ -245,9 +241,7 @@ export function Home() {
         </a>
       )}
 
-      {queue && <QueueList queue={queue} onChange={loadQueue} goal={prefs} />}
-
-      <CourseList courses={courses} recent={recent ?? []} />
+      {queue && queue.items.length > 0 && <QueueLine queue={queue} />}
 
       <section className="recent" aria-labelledby="recent-heading">
         <h2 id="recent-heading">Recently analyzed</h2>
@@ -255,27 +249,46 @@ export function Home() {
         {recent?.length === 0 && (
           <p className="muted">Videos you analyze appear here, so you can come back to their playlists.</p>
         )}
-        <ul className="recent__list">
-          {recent?.map((r) => (
-            <li key={r.analysis_id}>
-              <a className="recent__item" {...linkProps(`/v/${r.analysis_id}`)}>
-                <img src={r.video.thumbnail_url} alt="" loading="lazy" />
-                <div className="recent__body">
-                  <span className="recent__title">{r.video.title}</span>
-                  <span className="muted">
-                    {r.video.channel}. Watch {duration(r.playlist_s)} of {duration(r.video.duration_s)},{' '}
-                    {PROFILES[r.profile]?.label.toLowerCase() ?? r.profile} goal.
-                  </span>
-                  <WatchMap
-                    duration={r.video.duration_s}
-                    stretches={r.watch_map.map((s, i) => ({ ...s, key: String(i) }))}
-                  />
-                </div>
-              </a>
-            </li>
-          ))}
-        </ul>
+        {recent && recent.length > 0 && (
+          <>
+            <VideoList videos={recent.slice(0, 3)} />
+            <p className="recent__more">
+              <a {...linkProps('/videos')}>All videos</a>
+              {courses.length > 0 && (
+                <>
+                  {' · '}
+                  <a {...linkProps('/courses')}>
+                    {courses.length === 1 ? 'Your course' : `Your ${courses.length} courses`}
+                  </a>
+                </>
+              )}
+            </p>
+          </>
+        )}
       </section>
     </main>
+  )
+}
+
+/** The queue in one line: what's waiting or running, and a way to see it. */
+function QueueLine({ queue }: { queue: QueueStatus }) {
+  const running = queue.items.find((i) => i.status !== 'queued')
+  const waiting = queue.items.filter((i) => i.status === 'queued').length
+  return (
+    <p className="queueline" role="status">
+      {running ? (
+        <>
+          Analyzing <a {...linkProps(`/v/${running.analysis_id}`)}>{running.video.title}</a>
+          {running.progress ? `: ${running.progress.toLowerCase()}` : ''}.
+        </>
+      ) : null}
+      {waiting > 0 && (
+        <>
+          {running ? ' ' : ''}
+          {waiting} video{waiting === 1 ? '' : 's'} waiting, analyzed {queueHours(queue.window_start, queue.window_end)}.
+        </>
+      )}{' '}
+      <a {...linkProps('/queue')}>See the queue</a>
+    </p>
   )
 }

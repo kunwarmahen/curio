@@ -33,6 +33,7 @@ from curio_learn.analysis.redundancy import similarity_matrix
 from curio_learn.domain import (
     AnalysisStatus,
     ChecklistItem,
+    CoursePair,
     CoursePart,
     CoursePlan,
     CourseRef,
@@ -88,7 +89,11 @@ class Lecture:
     position: int
     analysis: VideoAnalysis
     units: Sequence[Utterance]
-    label: str = ""  # "Lecture 3"; defaults to the position
+    label: str = ""  # "Lecture 3", "Guest lecture"; defaults to the position
+
+    @property
+    def name(self) -> str:
+        return self.label or f"Lecture {self.position}"
 
 
 @dataclass
@@ -190,7 +195,7 @@ def _render_pair(p: Pair) -> str:
     def side(label: str, it: Item) -> str:
         s = it.section
         return (
-            f"{label}: Lecture {it.lecture.position} ({it.lecture.analysis.video.title}), "
+            f"{label}: {it.lecture.name} ({it.lecture.analysis.video.title}), "
             f'{fmt_ts(s.start_s)}–{fmt_ts(s.end_s)}\n{it.describe()}\nExcerpt: "{_excerpt(it)}"'
         )
 
@@ -238,7 +243,7 @@ def _outline(items: list[Item], lectures: Sequence[Lecture], budget_tokens: int)
     def render(full: set[str]) -> str:
         parts = []
         for lec in lectures:
-            parts.append(f"## Lecture {lec.position}: {lec.analysis.video.title}")
+            parts.append(f"## {lec.name}: {lec.analysis.video.title}")
             for it in items:
                 if it.lecture is not lec:
                     continue
@@ -344,10 +349,7 @@ def build_course_plan(
     goals = {lec.analysis.preferences.cache_key() for lec in lectures}
     for lec in lectures:
         if lec.analysis.preferences.cache_key() != prefs.cache_key():
-            warnings.append(
-                f"{lec.label or f'Lecture {lec.position}'} was analyzed for another goal; "
-                "its sections are scored for that goal."
-            )
+            warnings.append(f"{lec.name} was analyzed for another goal; its sections are scored for that goal.")
     if len(goals) > 1:
         log.info("Course %s mixes %d goals", course_id, len(goals))
 
@@ -460,6 +462,19 @@ def build_course_plan(
         analysis_ids=[lec.analysis.id for lec in lectures],
         parts=parts,
         repeats=skipped,
+        pairs=[
+            CoursePair(
+                a=p.a.ref(),
+                b=p.b.ref(),
+                relation=p.relation,
+                keep=p.keep,
+                reason=p.reason,
+                similarity=round(p.similarity, 3),
+                a_in_playlist=p.a.key in chosen,
+                b_in_playlist=p.b.key in chosen,
+            )
+            for p in pairs
+        ],
         checklist=checklist,
         warnings=warnings,
         llm=LLMInfo(provider=provider.name, models={"course": model}),

@@ -12,7 +12,7 @@
 | LAN access | ✅ app and Podman container listen on all interfaces by default |
 | Phase 3: Interactive learning | 🟡 Ask the Video, quizzes and flashcards with spaced repetition, a remembered default goal, and segment completion tracking; saved custom playlists are not built |
 | Overnight queue | ✅ queue videos any time; analyzed 1–7 AM while the GPU is idle |
-| Phase 4: Multi-video intelligence | 🟡 courses from YouTube playlists, one course playlist across lectures without repeats, an "easy to miss" checklist, and Ask the course; curricula across courses are not built |
+| Phase 4: Multi-video intelligence | 🟡 courses from YouTube playlists, one course playlist across lectures without repeats (every verdict shown), an "easy to miss" checklist, Ask the course, and a course quiz and flashcards; curricula across courses are not built |
 
 ## Phase 1 log (2026-11-23)
 
@@ -33,7 +33,7 @@
 - `storage`: SQLAlchemy/SQLite (videos, transcripts, analyses, segments),
   cache keyed by video + preferences + model + pipeline version.
 - `service`, FastAPI (`/api/v1`), CLI. (A Streamlit UI was built first and then replaced; see the UI log below.)
-- 98 offline tests at the end of Phase 1 (105 with notes, 115 with Ask the Video, 121 with the overnight queue, 131 with quizzes, flashcards and the default goal, 134 with overnight notes and quizzes, 140 with courses, 144 with Ask the course) (ad detection and carving, sentence units and boundary refinement, URL parsing, normalization, segmentation repair, scoring and
+- 98 offline tests at the end of Phase 1 (105 with notes, 115 with Ask the Video, 121 with the overnight queue, 131 with quizzes, flashcards and the default goal, 134 with overnight notes and quizzes, 140 with courses, 144 with Ask the course, 146 with the course quiz) (ad detection and carving, sentence units and boundary refinement, URL parsing, normalization, segmentation repair, scoring and
   calibration, playlist and prerequisites, validation, LLM retry, request shapes and
   truncation guard, service caching, stale runs, API).
 
@@ -406,6 +406,28 @@ general goal, so flagged), on a copy of the database:
   time.
 - 4 new tests (144 in total).
 
+### Menu, repeat verdicts, and course quiz and flashcards (2026-11-24)
+- **Menu.** A top bar on every page with the logo (home) and a Menu button that
+  opens a panel: Analyze a video, Courses, Videos, Queue, Review flashcards, with
+  counts. Courses, all videos and the queue moved to their own pages; the first page
+  keeps the form, cards due, the queue in one line and the three latest videos. The
+  course page's lower half became tabs, and its playlist scrolls on its own on wide
+  screens (the page went from 5,800 to 3,600 px). Checked at 1280 and 390 px:
+  Escape closes the menu and returns focus, going anywhere closes it, no horizontal
+  scroll, no console errors.
+- **Repeat verdicts.** Course playlists keep every pair judged; a Repeats tab shows
+  left-out sections, other repeats and overlaps with the model's reasons. A 3-hour
+  CS329Z build: 28 pairs, 3 repeats, 11 overlaps, 14 different, 1 left out. The
+  earlier "no repeats" builds were verdict variation, not a broken check. Reasons now
+  name lectures by label (not A/B), and lectures are named by label in course
+  prompts (the guest lecture was "Lecture 10").
+- **Course quiz and flashcards.** One set per lecture over its course-playlist
+  sections, checked as one quiz; a card per section and per "easy to miss" point (the
+  point is the answer); their own decks in review. CS329Z, 7 lectures: 60 questions,
+  72 cards, 7 minutes. A checked answer (chunk overlap "preserves context or
+  sentence boundary information", Lecture 3) matches the transcript.
+- 2 new tests (146 in total).
+
 ### Known gaps / next steps
 - The Anthropic provider is covered by unit tests with a mocked client only.
   No API key was available, so it has not been run against the live API yet.
@@ -414,7 +436,9 @@ general goal, so flagged), on a copy of the database:
 - Overnight queue, possible next step: pause between videos when someone starts using the GPU mid-run (today a running
   analysis finishes).
 - Phase 3, still to build: saved custom playlists.
-- Courses: reorder lectures by hand; flashcards from the "easy to miss" checklist.
+- Courses: reorder lectures by hand. Repeats are only looked for among each
+  section's closest match in another lecture (about 4 pairs a lecture), and half of
+  those turn out different; checking more pairs would find more.
 - Quizzes: the right answer is still too often the longest option. Options: a
   code-side retry for questions with a clear gap, or asking for the options in a
   fixed length band from the start.

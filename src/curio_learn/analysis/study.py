@@ -92,8 +92,8 @@ def counts(section: Section) -> tuple[int, int]:
     return 3, 4
 
 
-def _render(section: Section, units: Sequence[Utterance]) -> str:
-    q, c = counts(section)
+def _render(section: Section, units: Sequence[Utterance], budget: tuple[int, int] | None = None) -> str:
+    q, c = budget or counts(section)
     lines = "\n".join(f"{k}. {u.text}" for k, u in enumerate(units, 1))
     span = f"{fmt_ts(section.start_s)}–{fmt_ts(section.end_s)}"
     return (
@@ -194,8 +194,15 @@ def generate_study(
     batch_tokens: int,
     retries: int = 2,
     progress: Progress = lambda _: None,
+    budget: tuple[int, int] | None = None,
 ) -> StudySet:
+    """`budget`: questions and cards per section instead of the length-based counts
+    (a course asks fewer per section, over many lectures)."""
     started = time.monotonic()
+
+    def per(s: Section) -> tuple[int, int]:
+        return budget or counts(s)
+
     sections = scope_sections(analysis, scope, segment_ids)
     shared = f"Video: {analysis.video.title}\n\n{learner_brief(analysis.preferences)}"
     units_by = {s.id: section_units(s, units) for s in sections}
@@ -205,14 +212,16 @@ def generate_study(
 
     def run(batch: list[Section], label: str) -> None:
         ids = [s.id for s in batch]
-        q_max = sum(counts(s)[0] for s in batch)
-        c_max = sum(counts(s)[1] for s in batch)
+        q_max = sum(per(s)[0] for s in batch)
+        c_max = sum(per(s)[1] for s in batch)
         out = generate_structured(
             provider,
             StudyOut,
             model=model,
             system=prompts.STUDY_SYSTEM,
-            user=prompts.study_user(sections_text="\n\n".join(_render(s, units_by[s.id]) for s in batch), ids=ids),
+            user=prompts.study_user(
+                sections_text="\n\n".join(_render(s, units_by[s.id], budget) for s in batch), ids=ids
+            ),
             shared_prefix=shared,
             max_tokens=260 * q_max + 100 * c_max + 600,
             retries=retries,
@@ -252,7 +261,7 @@ def generate_study(
             bad_refs += 1
             return s.start_s
 
-        q_max, c_max = counts(s)
+        q_max, c_max = per(s)
         for q in entry.questions[:q_max]:
             cleaned = clean_question(q)
             if cleaned is None:
@@ -302,7 +311,13 @@ def generate_study(
         analysis_id=analysis.id,
         video_id=analysis.video.video_id,
         scope=scope,
-        segment_ids=sorted(set(segment_ids)) if scope is NotesScope.SELECTED else [],
+        segment_ids=(
+            sorted(set(segment_ids))
+            if scope is NotesScope.SELECTED
+            else list(segment_ids)
+            if scope is NotesScope.COURSE
+            else []
+        ),
         status=AnalysisStatus.DONE,
         progress="Done",
         questions=questions,
@@ -311,6 +326,38 @@ def generate_study(
         llm=LLMInfo(provider=provider.name, models={"study": model}),
         elapsed_s=round(time.monotonic() - started, 1),
     )
+
+
+class ChecklistFrontOut(BaseModel):
+    n: int
+    front: str
+
+
+class ChecklistCardsOut(BaseModel):
+    cards: list[ChecklistFrontOut]
+
+
+def checklist_fronts(provider: LLMProvider, *, model: str, points: Sequence[str], retries: int = 2) -> dict[int, str]:
+    """A question for each "easy to miss" point; the point itself is the card's back,
+    so the card says nothing the course playlist's checklist doesn't. Keyed by point
+    number (from 1); points the model skipped are missing."""
+    text = "\n".join(f"{n}. {p}" for n, p in enumerate(points, 1))
+    out = generate_structured(
+        provider,
+        ChecklistCardsOut,
+        model=model,
+        system=prompts.CHECKLIST_CARDS_SYSTEM,
+        user=prompts.checklist_cards_user(points=text, count=len(points)),
+        max_tokens=80 * len(points) + 300,
+        retries=retries,
+        task="study[checklist]",
+    )
+    fronts: dict[int, str] = {}
+    for c in out.cards:
+        front = " ".join(c.front.split())
+        if 1 <= c.n <= len(points) and front and c.n not in fronts:
+            fronts[c.n] = front
+    return fronts
 
 
 # ------------------------------------------------------- spaced repetition

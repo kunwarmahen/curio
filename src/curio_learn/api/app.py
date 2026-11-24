@@ -23,6 +23,7 @@ from curio_learn.domain import (
     CardState,
     Course,
     CourseAnswer,
+    CoursePractice,
     FlashcardDeck,
     LearningNotes,
     LearningPreferences,
@@ -408,6 +409,25 @@ def create_app(service: CurioService | None = None) -> FastAPI:
     def clear_course_conversation(course_id: str, request: Request):
         return {"deleted": svc(request).clear_course_conversation(course_id)}
 
+    @app.post("/api/v1/courses/{course_id}/practice", status_code=202, response_model=CoursePractice)
+    def write_course_practice(course_id: str, body: PlanRequest, request: Request):
+        """A quiz and flashcards for every lecture of the course playlist (`force`: rewrite)."""
+        s = svc(request)
+        try:
+            to_run = s.submit_course_practice(course_id, force=body.force)
+        except KeyError:
+            raise HTTPException(404, {"code": "not_found", "message": "Unknown course id"}) from None
+        if to_run:
+            jobs.submit(_run_course_practice_safely, s, course_id, to_run)
+        return s.course_practice(course_id)
+
+    @app.get("/api/v1/courses/{course_id}/practice", response_model=CoursePractice)
+    def course_practice(course_id: str, request: Request):
+        try:
+            return svc(request).course_practice(course_id)
+        except KeyError:
+            raise HTTPException(404, {"code": "not_found", "message": "Unknown course id"}) from None
+
     @app.get("/api/v1/courses/{course_id}/watched", response_model=list[str])
     def course_watched(course_id: str, request: Request):
         return sorted(svc(request).course_watched(course_id))
@@ -420,8 +440,16 @@ def create_app(service: CurioService | None = None) -> FastAPI:
         return {"part_key": body.part_key, "watched": body.watched}
 
     @app.get("/api/v1/flashcards", response_model=FlashcardDeck)
-    def flashcards(request: Request, analysis_id: str | None = None, study_id: str | None = None, limit: int = 50):
-        return svc(request).flashcards(analysis_id, study_id=study_id, limit=min(max(limit, 0), 500))
+    def flashcards(
+        request: Request,
+        analysis_id: str | None = None,
+        study_id: str | None = None,
+        course_id: str | None = None,
+        limit: int = 50,
+    ):
+        return svc(request).flashcards(
+            analysis_id, study_id=study_id, course_id=course_id, limit=min(max(limit, 0), 500)
+        )
 
     @app.post("/api/v1/flashcards/review", response_model=CardState)
     def review_card(body: ReviewRequest, request: Request):
@@ -553,6 +581,13 @@ def _run_course_plan_safely(service: CurioService, plan_id: str) -> None:
         service.run_course_plan(plan_id)
     except Exception:
         log.warning("Course plan %s failed", plan_id, exc_info=True)
+
+
+def _run_course_practice_safely(service: CurioService, course_id: str, study_ids: list[str]) -> None:
+    try:
+        service.run_course_practice(course_id, study_ids)
+    except Exception:
+        log.warning("Course practice for %s failed", course_id, exc_info=True)
 
 
 def _run_study_safely(service: CurioService, study_id: str) -> None:

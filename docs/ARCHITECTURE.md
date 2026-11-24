@@ -91,7 +91,9 @@ curio/
 │   ├── api/app.py            FastAPI app
 │
 ├── web/                      React + Vite + TypeScript frontend
-│   └── src/                  pages (Home, VideoPage, Course, Review), WatchMap, Player, api.ts
+│   └── src/                  pages (Home, VideoPage, Course, Lists: Courses/Videos/Queue,
+│                             Review), TopBar (logo + hidden menu), WatchMap, Player, Ask,
+│                             Quiz, Flashcards, api.ts, a small history router
 └── tests/                    pytest; no network, LLM mocked
 ```
 
@@ -182,7 +184,7 @@ invent a timestamp: code converts the numbers to the original cue times.
 | `GET`  | `/study/{id}` | `StudySet` (poll while `pending`/`running`) |
 | `POST` | `/study/{id}/attempts` | `{answers: {question id: option index}}` → `QuizAttempt` (graded and saved) |
 | `GET`  | `/study/{id}/attempts` | `[QuizAttempt]`, newest first |
-| `GET`  | `/flashcards?study_id=&analysis_id=&limit=` | `FlashcardDeck {cards[DueCard], due, total, next_due_at}`: due cards from every video's newest set, one video's, or one set |
+| `GET`  | `/flashcards?study_id=&analysis_id=&course_id=&limit=` | `FlashcardDeck {cards[DueCard], due, total, next_due_at}`: due cards from every deck, one video's, one course's (in lecture order), or one set |
 | `POST` | `/flashcards/review` | `{study_id, card_id, grade: again\|good\|easy}` → `CardState` |
 | `GET`  | `/preferences/default` / `PUT` | the learner's default goal `{profile, custom_objective, target_minutes}` (`PUT` body `{preferences}`) |
 | `POST` | `/courses` | `{url, preferences}` → `202 {course_id}`: a course from a YouTube playlist (the same playlist and goal reuse the course). Its lectures are checked and queued in a background thread beside the job worker |
@@ -193,6 +195,8 @@ invent a timestamp: code converts the numbers to the original cue times.
 | `POST` | `/courses/{id}/plan` | `{minutes?, force?}` → `202 {plan_id, status}`: build the course playlist from the lectures analyzed so far, on the job worker |
 | `POST` | `/courses/{id}/questions` | `{question}` → `CourseAnswer` (synchronous; citations carry `video_id`, `analysis_id`, `lecture`) |
 | `GET`  | `/courses/{id}/questions` / `DELETE` | the course conversation, oldest first / clear it |
+| `POST` | `/courses/{id}/practice` | `{force?}` → `202 CoursePractice`: a quiz and flashcards for every lecture of the course playlist, on the job worker; sets with the same sections are reused unless `force` |
+| `GET`  | `/courses/{id}/practice` | `CoursePractice {sets[{lecture, study}], status, progress, stale, questions, cards}` |
 | `GET`  | `/courses/{id}/watched` / `PUT` | watched course parts (`PUT` body `{part_key, watched}`) |
 | `POST` | `/queue/preferences` | `{preferences, analysis_ids?, save_default?}` → `{updated[], already_analyzed[]}`: give queued videos a goal (all queued when no ids); a video already analyzed with that goal leaves the queue |
 
@@ -417,10 +421,11 @@ Chance is 2 of 8. The checking call costs 10-15 s; the set took 45-75 s in total
 "Forgot" puts it in box 1, due in 10 minutes (a lapse if it had been learned);
 "Remembered" moves it up one box and "Easy" two, due after 1, 3, 7, 16, 35 or 90 days.
 The review deck is each analysis's newest finished set (writing a new set replaces
-the cards in review; the old set can still be drilled from the tab by `study_id`):
+the cards in review; the old set can still be drilled from the tab by `study_id`),
+plus, as separate decks, each analysis's newest set for each course (§13):
 overdue cards first, most overdue first, then new cards in video order.
 
-## 13. Courses (`ingestion/playlist.py`, `analysis/course.py`)
+## 13. Courses (`ingestion/playlist.py`, `analysis/course.py`, `analysis/course_ask.py`)
 
 **Lectures.** A course is a list of videos in order (`courses.lectures_json`) and a
 goal. From a playlist, yt-dlp lists the entries flat (no download, one request);
@@ -484,6 +489,29 @@ names come first, and a time it names in one lecture is read first. Citations be
 sentence starts in that lecture (`precise_start`). On CS329Z: about 40 s an answer;
 the claims checked ("a demo that works once … will not score highly", observation
 masking and compaction "very similar" in solve rate) were in the transcripts.
+
+**Repeat verdicts.** Every pair the model judged is kept in the plan (`pairs`: both
+sections, verdict, which to keep, reason, similarity, and whether each half is in
+the playlist), and the Repeats tab shows them. On CS329Z, a 3-hour build compared
+28 pairs: 3 repeats (1 left out, 2 where the other half was also out or the pair
+crossed the budget), 11 overlaps, 14 different. Builds that showed no left-out
+repeats were run-to-run variation in the verdicts plus a long budget, not a broken
+check. Reasons name lectures by their labels ("Lecture 8 adds…").
+
+**Course quiz and flashcards.** A study set per lecture with scope `course`: its
+`segment_ids` are the section ids the course playlist uses from that lecture, and its
+scope key is `course|<course id>|<hash of the sections>` (so the same sections reuse
+it, and the course is known from the key). One question and one card per section
+(`generate_study(budget=(1, 1))`), then one call writes a card question for each
+"easy to miss" point; the point itself is the back, attached to the set of the
+lecture it cites first, at that section. In review, decks are keyed by analysis and
+course, so a course's cards don't replace a lecture's own. On CS329Z (7 lectures, 60
+sections): 60 questions and 72 cards in 7 minutes.
+
+**Page layout.** The course map, player and course playlist stay on top; Easy to
+miss, Quiz and flashcards, Ask the course, Repeats and Lectures are tabs below, as
+on a video page. Everything else in the app is one menu away (top bar on every
+page).
 
 **Playback.** One YouTube player; a clip names its video, so the course plays parts
 of several lectures in a row. Watched parts are stored per course by

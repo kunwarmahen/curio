@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { ApiError, api, type CardGrade, type FlashcardDeck } from '../api'
+import { ApiError, api, type CardGrade, type DueCard, type FlashcardDeck } from '../api'
 import { BOX_DAYS, clock, intervalLabel, until } from '../format'
 import { TimeLink } from './TimeLink'
 
@@ -15,10 +15,16 @@ function nextLabel(box: number, grade: CardGrade): string {
   return `next in ${intervalLabel(BOX_DAYS[next])}`
 }
 
-/** Review the flashcards that are due: one set's (in a video's tab) or every video's.
- *  With `onSeek`, a card's time plays in the page's player; otherwise it opens YouTube. */
-export function FlashcardSession(props: { studyId?: string; onSeek?: (t: number) => void }) {
-  const { studyId, onSeek } = props
+/** Review the flashcards that are due: one set's (in a video's tab), one course's, or
+ *  every deck's. With `onSeek`, a card's time plays in the page's player; otherwise it
+ *  opens YouTube. `label` names a card's lecture in a course. */
+export function FlashcardSession(props: {
+  studyId?: string
+  courseId?: string
+  onSeek?: (t: number, due: DueCard) => void
+  label?: (due: DueCard) => string
+}) {
+  const { studyId, courseId, onSeek, label } = props
   const [deck, setDeck] = useState<FlashcardDeck | null>(null)
   const [index, setIndex] = useState(0)
   const [revealed, setRevealed] = useState(false)
@@ -27,7 +33,7 @@ export function FlashcardSession(props: { studyId?: string; onSeek?: (t: number)
   const [err, setErr] = useState('')
 
   const load = useCallback(() => {
-    api.flashcards(studyId).then(
+    api.flashcards(studyId, 50, courseId).then(
       (d) => {
         setDeck(d)
         setIndex(0)
@@ -35,7 +41,7 @@ export function FlashcardSession(props: { studyId?: string; onSeek?: (t: number)
       },
       (e) => setErr(e instanceof ApiError ? e.message : 'Could not load the flashcards.'),
     )
-  }, [studyId])
+  }, [studyId, courseId])
   useEffect(load, [load])
 
   const due = deck?.cards[index]
@@ -120,7 +126,7 @@ export function FlashcardSession(props: { studyId?: string; onSeek?: (t: number)
       </p>
 
       <article className="indexcard" aria-live="polite">
-        {!studyId && <p className="indexcard__video">{due.video_title}</p>}
+        {!studyId && <p className="indexcard__video">{label ? label(due) : due.video_title}</p>}
         <p className="indexcard__front">{due.card.front}</p>
         {revealed && (
           <div className="indexcard__back">
@@ -128,7 +134,7 @@ export function FlashcardSession(props: { studyId?: string; onSeek?: (t: number)
             <p className="indexcard__source">
               {onSeek ? (
                 <>
-                  Said at <TimeLink t={t} onSeek={onSeek} />
+                  Said at <TimeLink t={t} onSeek={(x) => onSeek(x, due)} />
                 </>
               ) : (
                 <a href={`${due.video_url}&t=${Math.floor(t)}s`} target="_blank" rel="noreferrer">

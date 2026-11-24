@@ -519,19 +519,34 @@ class Repository:
 
     @staticmethod
     def _study_from_row(row: StudySetRow) -> StudySet:
+        # A course's sets have scope keys "course|<course id>|<sections hash>".
+        course_id = row.scope_key.split("|")[1] if row.scope_key.startswith("course|") else ""
         if row.study_json:
-            return StudySet.model_validate(row.study_json)
+            study = StudySet.model_validate(row.study_json)
+            study.course_id = course_id
+            return study
         return StudySet(
             id=row.id,
             analysis_id=row.analysis_id,
             video_id="",
             scope=NotesScope(row.scope),
             segment_ids=row.segment_ids or [],
+            course_id=course_id,
             status=AnalysisStatus(row.status),
             progress=row.progress,
             error=row.error,
             created_at=_aware(row.created_at),
         )
+
+    def course_study_sets(self, course_id: str) -> list[StudySet]:
+        """A course's quiz and flashcard sets (one per lecture and build), newest first."""
+        with self.session() as db:
+            rows = db.scalars(
+                select(StudySetRow)
+                .where(StudySetRow.scope_key.startswith(f"course|{course_id}|"))
+                .order_by(StudySetRow.created_at.desc())
+            )
+            return [self._study_from_row(r) for r in rows]
 
     def get_study(self, study_id: str) -> StudySet | None:
         with self.session() as db:
@@ -571,7 +586,8 @@ class Repository:
 
     def decks(self) -> list[tuple[StudySet, VideoMetadata]]:
         """The newest finished study set of each analysis (its cards are the ones
-        reviewed; writing a new set replaces the older one's cards), newest first."""
+        reviewed; writing a new set replaces the older one's cards), and of each
+        analysis within each course (a course's cards are their own deck), newest first."""
         with self.session() as db:
             stmt = (
                 select(StudySetRow, VideoRow)
@@ -582,9 +598,10 @@ class Repository:
             )
             out, seen = [], set()
             for row, video in db.execute(stmt):
-                if row.analysis_id in seen:
+                course = row.scope_key.split("|")[1] if row.scope_key.startswith("course|") else ""
+                if (row.analysis_id, course) in seen:
                     continue
-                seen.add(row.analysis_id)
+                seen.add((row.analysis_id, course))
                 out.append((self._study_from_row(row), VideoMetadata.model_validate(video.metadata_json)))
             return out
 

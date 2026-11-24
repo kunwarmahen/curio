@@ -21,7 +21,8 @@ export function PracticePanel({ analysis, onSeek }: { analysis: Analysis; onSeek
     api.studyList(analysis.id).then(
       (list) => {
         setSets(list)
-        const latest = list.find((s) => s.status !== 'failed' && s.scope !== 'selected')
+        // A course's sets live on the course page.
+        const latest = list.find((s) => s.status !== 'failed' && (s.scope === 'playlist' || s.scope === 'video'))
         if (latest) setScope(latest.scope)
       },
       () => setSets([]),

@@ -6,7 +6,6 @@ import { PracticePanel } from '../components/Practice'
 import { Player, type Clip } from '../components/Player'
 import { WatchMap, WatchMapLegend, type Stretch } from '../components/WatchMap'
 import { IMPORTANCE_LABEL, PROFILES, clock, duration, queueHours } from '../format'
-import { BackLink } from '../components/Logo'
 import { navigate } from '../router'
 
 export function VideoPage({ id }: { id: string }) {
@@ -41,7 +40,6 @@ export function VideoPage({ id }: { id: string }) {
   if (error) {
     return (
       <main className="page">
-        <BackLink />
         <p className="form-error" role="alert">
           {error}
         </p>
@@ -59,7 +57,6 @@ export function VideoPage({ id }: { id: string }) {
 function Progress({ analysis, steps }: { analysis: Analysis; steps: string[] }) {
   return (
     <main className="page progress">
-      <BackLink />
       <h1>{analysis.video.title}</h1>
       <p className="muted">{analysis.video.channel}</p>
       <div className="progress__track" aria-hidden />
@@ -105,7 +102,6 @@ function Queued({ analysis, onStarted }: { analysis: Analysis; onStarted: () => 
   }
   return (
     <main className="page">
-      <BackLink />
       <h1>{analysis.video.title}</h1>
       <p className="muted">{analysis.video.channel}</p>
       <p className="queued__lede">
@@ -144,7 +140,6 @@ function Failed({ analysis }: { analysis: Analysis }) {
   }
   return (
     <main className="page">
-      <BackLink />
       <h1>{analysis.video.title}</h1>
       <p className="form-error" role="alert">
         The analysis stopped: {analysis.error || 'unknown error.'}
@@ -244,7 +239,6 @@ function Results({ analysis }: { analysis: Analysis }) {
 
   return (
     <main className="page results">
-      <BackLink />
       <header className="results__head">
         <h1>{analysis.video.title}</h1>
         <p className="muted">

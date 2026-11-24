@@ -118,7 +118,7 @@ export interface RecentVideo {
   watch_map: MapStretch[]
 }
 
-export type NotesScope = 'playlist' | 'video' | 'selected'
+export type NotesScope = 'playlist' | 'video' | 'selected' | 'course'
 
 export interface NotePoint {
   text: string
@@ -233,6 +233,7 @@ export interface StudySet {
   video_id: string
   scope: NotesScope
   segment_ids: string[]
+  course_id: string
   status: Status
   progress: string
   error: string
@@ -241,6 +242,16 @@ export interface StudySet {
   warnings: string[]
   created_at: string
   elapsed_s: number
+}
+
+export interface CoursePractice {
+  course_id: string
+  sets: { lecture: number; study: StudySet }[]
+  status: Status | null
+  progress: string
+  stale: boolean
+  questions: number
+  cards: number
 }
 
 export interface QuizAttempt {
@@ -347,6 +358,17 @@ export interface CourseRepeat {
   reason: string
 }
 
+export interface CoursePair {
+  a: CourseRef
+  b: CourseRef
+  relation: 'repeat' | 'overlap' | 'different' | ''
+  keep: 'A' | 'B' | ''
+  reason: string
+  similarity: number
+  a_in_playlist: boolean
+  b_in_playlist: boolean
+}
+
 export interface ChecklistItem {
   text: string
   why: string
@@ -366,6 +388,7 @@ export interface CoursePlan {
   analysis_ids: string[]
   parts: CoursePart[]
   repeats: CourseRepeat[]
+  pairs?: CoursePair[] // missing on plans built before the comparisons were kept
   checklist: ChecklistItem[]
   warnings: string[]
   elapsed_s: number
@@ -455,7 +478,7 @@ export const api = {
     }),
   clearConversation: (analysisId: string) =>
     request<{ deleted: number }>(`/analyses/${encodeURIComponent(analysisId)}/questions`, { method: 'DELETE' }),
-  recent: () => request<RecentVideo[]>('/videos/recent?limit=12'),
+  recent: (limit = 12) => request<RecentVideo[]>(`/videos/recent?limit=${limit}`),
   studyList: (analysisId: string) => request<StudySet[]>(`/analyses/${encodeURIComponent(analysisId)}/study`),
   writeStudy: (analysisId: string, scope: NotesScope, force = false) =>
     request<{ study_id: string; status: Status }>(`/analyses/${encodeURIComponent(analysisId)}/study`, {
@@ -470,8 +493,19 @@ export const api = {
     }),
   quizAttempts: (id: string) => request<QuizAttempt[]>(`/study/${encodeURIComponent(id)}/attempts`),
   /** Due cards from every video's newest set, or from one set. */
-  flashcards: (studyId?: string, limit = 50) =>
-    request<FlashcardDeck>(`/flashcards?limit=${limit}${studyId ? `&study_id=${encodeURIComponent(studyId)}` : ''}`),
+  /** Due cards from every deck, one set's, or one course's. */
+  flashcards: (studyId?: string, limit = 50, courseId?: string) =>
+    request<FlashcardDeck>(
+      `/flashcards?limit=${limit}${studyId ? `&study_id=${encodeURIComponent(studyId)}` : ''}${
+        courseId ? `&course_id=${encodeURIComponent(courseId)}` : ''
+      }`,
+    ),
+  coursePractice: (id: string) => request<CoursePractice>(`/courses/${encodeURIComponent(id)}/practice`),
+  writeCoursePractice: (id: string, force = false) =>
+    request<CoursePractice>(`/courses/${encodeURIComponent(id)}/practice`, {
+      method: 'POST',
+      body: JSON.stringify({ force }),
+    }),
   reviewCard: (studyId: string, cardId: string, grade: CardGrade) =>
     request<CardState>('/flashcards/review', {
       method: 'POST',

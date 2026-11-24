@@ -1,5 +1,3 @@
-import { linkProps } from '../router'
-
 /** Curio's mark: a highlighter swipe across the line of a video, with the playhead in it.
  *  The same drawing as public/favicon.svg. */
 export function Mark({ size = 28 }: { size?: number }) {
@@ -13,25 +11,5 @@ export function Mark({ size = 28 }: { size?: number }) {
       />
       <rect x="19.3" y="7" width="2.4" height="18" rx="1.2" fill="#D4413B" />
     </svg>
-  )
-}
-
-/** The mark and the name, on the home page. */
-export function Wordmark() {
-  return (
-    <p className="wordmark">
-      <Mark size={34} />
-      <span className="wordmark__name">Curio</span>
-    </p>
-  )
-}
-
-/** Back to the home page, from every other page. */
-export function BackLink() {
-  return (
-    <a className="back" {...linkProps('/')}>
-      <Mark size={20} />
-      <span>All videos</span>
-    </a>
   )
 }

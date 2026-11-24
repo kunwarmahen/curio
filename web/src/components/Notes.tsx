@@ -13,6 +13,7 @@ const SCOPE_PHRASE: Record<NotesScope, string> = {
   playlist: 'your playlist',
   video: 'the whole video',
   selected: 'the parts you picked',
+  course: 'the course playlist',
 }
 
 const sameSet = (a: string[], b: Set<string>) => a.length === b.size && a.every((x) => b.has(x))

@@ -221,6 +221,13 @@ class FakeLLM:
                     ]
                 }
             )
+        if name == "ChecklistCardsOut":
+            import re
+
+            nums = [int(n) for n in re.findall(r"^(\d+)\. ", user, re.M)]
+            return json.dumps(
+                {"cards": [{"n": n, "front": f"What is point {n}?"} for n in nums] + [{"n": 99, "front": "x"}]}
+            )
         if name == "CourseAnswerOut":
             import re
 

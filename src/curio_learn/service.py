@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 import uuid
@@ -14,7 +15,7 @@ from curio_learn.analysis.course_ask import LectureText, answer_course_question,
 from curio_learn.analysis.notes import generate_notes, scope_key, scope_sections, to_markdown
 from curio_learn.analysis.pipeline import AnalysisPipeline
 from curio_learn.analysis.playlist import PlaylistConfig
-from curio_learn.analysis.study import generate_study, is_due, schedule
+from curio_learn.analysis.study import checklist_fronts, generate_study, is_due, schedule
 from curio_learn.config import Settings, get_settings
 from curio_learn.domain import (
     AnalysisStatus,
@@ -26,7 +27,10 @@ from curio_learn.domain import (
     CourseAnswer,
     CourseLecture,
     CoursePlan,
+    CoursePractice,
+    CourseStudy,
     DueCard,
+    Flashcard,
     FlashcardDeck,
     LearningNotes,
     LearningPreferences,
@@ -400,16 +404,28 @@ class CurioService:
         segment_ids: list[str] | None = None,
         *,
         force: bool = False,
+        course_id: str = "",
     ) -> tuple[str, bool]:
-        """Register a quiz and flashcards for an analysis. Returns (study_id, needs_run)."""
+        """Register a quiz and flashcards for an analysis. Returns (study_id, needs_run).
+        The course scope takes section ids (in order) and the course they're for."""
         analysis = self.repo.get_analysis(analysis_id)
         if analysis is None:
             raise KeyError(analysis_id)
         if analysis.status != AnalysisStatus.DONE:
             raise AnalysisError("A quiz can be written once the analysis has finished.")
-        ids = sorted(set(segment_ids or [])) if scope is NotesScope.SELECTED else []
+        if scope is NotesScope.COURSE:
+            if not course_id:
+                raise AnalysisError("A course quiz needs its course.")
+            ids = list(dict.fromkeys(segment_ids or []))
+        else:
+            ids = sorted(set(segment_ids or [])) if scope is NotesScope.SELECTED else []
         scope_sections(analysis, scope, ids)  # validates the selection
-        key, llm_key = scope_key(scope, ids), self.study_llm_key()
+        if scope is NotesScope.COURSE:
+            digest = hashlib.sha256(",".join(ids).encode()).hexdigest()[:12]
+            key = f"course|{course_id}|{digest}"
+        else:
+            key = scope_key(scope, ids)
+        llm_key = self.study_llm_key()
         if not force:
             existing = self.repo.find_study(analysis_id, key, llm_key)
             if existing:
@@ -445,8 +461,11 @@ class CurioService:
                 batch_tokens=60000 if self.llm.name == "anthropic" else self.settings.evaluate_batch_tokens,
                 retries=self.settings.llm_max_retries,
                 progress=report,
+                # A course asks one question and one card per section, over many lectures.
+                budget=(1, 1) if pending.scope is NotesScope.COURSE else None,
             )
             study.created_at = pending.created_at
+            study.course_id = pending.course_id
             self.repo.save_study(study)
             return study
         except CurioError as exc:
@@ -510,6 +529,7 @@ class CurioService:
         analysis_id: str | None = None,
         *,
         study_id: str | None = None,
+        course_id: str | None = None,
         limit: int = 50,
         now: datetime | None = None,
     ) -> FlashcardDeck:
@@ -521,7 +541,16 @@ class CurioService:
             analysis = self.repo.get_analysis(study.analysis_id) if study else None
             decks = [(study, analysis.video)] if study and analysis and study.status == AnalysisStatus.DONE else []
         else:
-            decks = [(s, v) for s, v in self.repo.decks() if analysis_id is None or s.analysis_id == analysis_id]
+            decks = [
+                (s, v)
+                for s, v in self.repo.decks()
+                if (analysis_id is None or s.analysis_id == analysis_id)
+                and (course_id is None or s.course_id == course_id)
+            ]
+            if course_id:  # a course's new cards come in lecture order
+                course = self.course(course_id)
+                order = {lec.analysis_id: lec.position for lec in course.lectures} if course else {}
+                decks.sort(key=lambda d: order.get(d[0].analysis_id, 0))
         states = self.repo.card_states([s.id for s, _ in decks])
         due: list[DueCard] = []
         upcoming: list[datetime] = []
@@ -1037,6 +1066,116 @@ class CurioService:
 
     def clear_course_conversation(self, course_id: str) -> int:
         return self.repo.clear_course_answers(course_id)
+
+    # ------------------------------------------------- course quiz and flashcards
+
+    def _plan_sections(self, plan: CoursePlan) -> dict[str, list[str]]:
+        """The sections of each analysis in a course playlist, in order."""
+        out: dict[str, list[str]] = {aid: [] for aid in plan.analysis_ids}
+        for part in plan.parts:
+            for sid in part.section_ids:
+                if sid not in out.setdefault(part.analysis_id, []):
+                    out[part.analysis_id].append(sid)
+        return {aid: ids for aid, ids in out.items() if ids}
+
+    def course_practice(self, course_id: str) -> CoursePractice:
+        course = self.course(course_id)
+        if course is None:
+            raise KeyError(course_id)
+        positions = {lec.analysis_id: lec.position for lec in course.lectures if lec.analysis_id}
+        newest: dict[str, StudySet] = {}
+        for st in self.repo.course_study_sets(course_id):
+            newest.setdefault(st.analysis_id, st)
+        if not newest:
+            return CoursePractice(course_id=course_id)
+        plan = course.plan if course.plan and course.plan.status == AnalysisStatus.DONE else None
+        wanted = self._plan_sections(plan) if plan else {}
+        sets = [
+            CourseStudy(lecture=positions.get(aid, 0), study=st)
+            for aid, st in newest.items()
+            if not wanted or aid in wanted
+        ]
+        sets.sort(key=lambda x: x.lecture)
+        live = [x.study for x in sets if x.study.status in (AnalysisStatus.PENDING, AnalysisStatus.RUNNING)]
+        done = [x.study for x in sets if x.study.status == AnalysisStatus.DONE]
+        status = AnalysisStatus.RUNNING if live else AnalysisStatus.DONE if done else AnalysisStatus.FAILED
+        stale = bool(wanted) and any(aid not in newest or newest[aid].segment_ids != ids for aid, ids in wanted.items())
+        progress = ""
+        if live:
+            n = next(i for i, x in enumerate(sets, 1) if x.study in live)
+            progress = f"Lecture {n} of {len(sets)}: {live[0].progress or 'waiting'}"
+        return CoursePractice(
+            course_id=course_id,
+            sets=sets,
+            status=status,
+            progress=progress,
+            stale=stale,
+            questions=sum(len(s.questions) for s in done),
+            cards=sum(len(s.cards) for s in done),
+        )
+
+    def submit_course_practice(self, course_id: str, *, force: bool = False) -> list[str]:
+        """Register a quiz and flashcards for every lecture of the course playlist.
+        Returns the sets that need writing (the rest are reused)."""
+        course = self.course(course_id)
+        if course is None:
+            raise KeyError(course_id)
+        plan = course.plan
+        if plan is None or plan.status != AnalysisStatus.DONE:
+            raise AnalysisError("Build the course playlist first; the quiz covers its parts.")
+        to_run = []
+        for aid, sections in self._plan_sections(plan).items():
+            study_id, needs_run = self.submit_study(aid, NotesScope.COURSE, sections, force=force, course_id=course_id)
+            if needs_run:
+                to_run.append(study_id)
+        return to_run
+
+    def run_course_practice(self, course_id: str, study_ids: list[str]) -> CoursePractice:
+        """Write the sets in lecture order, then add a card for each "easy to miss"
+        point to the set of the lecture it cites first."""
+        written: dict[str, StudySet] = {}
+        for sid in study_ids:
+            try:
+                st = self.run_study(sid)
+                written[st.analysis_id] = st
+            except Exception:  # recorded on the set
+                log.warning("[course %s] A lecture's quiz failed", course_id, exc_info=True)
+        course = self.course(course_id)
+        plan = course.plan if course else None
+        if written and plan and plan.checklist:
+            items = [it for it in plan.checklist if it.refs and it.refs[0].analysis_id in written]
+            try:
+                fronts = (
+                    checklist_fronts(
+                        self.llm,
+                        model=self.settings.model_for("study"),
+                        points=[it.text for it in items],
+                        retries=self.settings.llm_max_retries,
+                    )
+                    if items
+                    else {}
+                )
+            except CurioError as exc:
+                log.warning("[course %s] Checklist cards failed: %s", course_id, exc.message)
+                fronts = {}
+            for n, item in enumerate(items, 1):
+                front = fronts.get(n)
+                if not front:
+                    continue
+                ref = item.refs[0]
+                st = written[ref.analysis_id]
+                st.cards.append(
+                    Flashcard(
+                        id=f"m{sum(c.id.startswith('m') for c in st.cards) + 1}",
+                        front=front,
+                        back=item.text,
+                        section_id=ref.section_id,
+                        start_s=ref.start_s,
+                    )
+                )
+            for st in written.values():
+                self.repo.save_study(st)
+        return self.course_practice(course_id)
 
     def course_watched(self, course_id: str) -> set[str]:
         return self.repo.course_watched(course_id)

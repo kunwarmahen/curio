@@ -84,6 +84,11 @@ def scope_sections(analysis: VideoAnalysis, scope: NotesScope, segment_ids: Sequ
     by_id = {s.section.id: s.section for s in analysis.sections}
     if scope is NotesScope.VIDEO:
         ids = [s.section.id for s in analysis.sections if s.section.kind not in ALWAYS_SKIP]
+    elif scope is NotesScope.COURSE:
+        ids = list(segment_ids)
+        unknown = set(ids) - set(by_id)
+        if unknown:
+            raise AnalysisError(f"Unknown section ids: {', '.join(sorted(unknown))}.")
     else:
         if scope is NotesScope.PLAYLIST:
             segments = analysis.playlist.segments if analysis.playlist else []

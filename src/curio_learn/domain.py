@@ -261,6 +261,7 @@ class NotesScope(StrEnum):
     PLAYLIST = "playlist"  # the sections in the curated playlist
     VIDEO = "video"  # every section except sponsor reads and housekeeping
     SELECTED = "selected"  # segments the learner picked
+    COURSE = "course"  # sections in a course playlist (ids of sections, not segments)
 
 
 class NotePoint(BaseModel):
@@ -399,7 +400,8 @@ class StudySet(BaseModel):
     analysis_id: str
     video_id: str
     scope: NotesScope
-    segment_ids: list[str] = Field(default_factory=list)
+    segment_ids: list[str] = Field(default_factory=list)  # section ids for the course scope
+    course_id: str = ""  # set for the course scope
     status: AnalysisStatus = AnalysisStatus.PENDING
     progress: str = ""
     error: str = ""
@@ -526,6 +528,19 @@ class CourseRepeat(BaseModel):
     reason: str
 
 
+class CoursePair(BaseModel):
+    """Two sections of different lectures the model compared (a is the earlier)."""
+
+    a: CourseRef
+    b: CourseRef
+    relation: str  # "repeat", "overlap", "different", or "" when no verdict came back
+    keep: str = ""  # "A" or "B": the one to watch if only one
+    reason: str = ""
+    similarity: float = 0.0
+    a_in_playlist: bool = False
+    b_in_playlist: bool = False
+
+
 class ChecklistItem(BaseModel):
     text: str
     why: str = ""
@@ -545,6 +560,7 @@ class CoursePlan(BaseModel):
     analysis_ids: list[str] = Field(default_factory=list)  # the inputs, in course order
     parts: list[CoursePart] = Field(default_factory=list)
     repeats: list[CourseRepeat] = Field(default_factory=list)
+    pairs: list[CoursePair] = Field(default_factory=list)  # every pair judged, closest first
     checklist: list[ChecklistItem] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     llm: LLMInfo | None = None
@@ -587,3 +603,20 @@ class CourseAnswer(BaseModel):
     llm: LLMInfo | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     elapsed_s: float = 0.0
+
+
+class CourseStudy(BaseModel):
+    lecture: int  # position in the course
+    study: StudySet
+
+
+class CoursePractice(BaseModel):
+    """A course's quiz and flashcards: one set per lecture of the course playlist."""
+
+    course_id: str
+    sets: list[CourseStudy] = Field(default_factory=list)  # in lecture order
+    status: AnalysisStatus | None = None  # None: never written
+    progress: str = ""
+    stale: bool = False  # the course playlist changed since they were written
+    questions: int = 0
+    cards: int = 0

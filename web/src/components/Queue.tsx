@@ -35,7 +35,7 @@ function goalLine(p: Preferences): string {
   return parts.join(', ')
 }
 
-/** The overnight queue on the home page: waiting and running videos. */
+/** The overnight queue: waiting and running videos. `goal` is the learner's current goal. */
 export function QueueList(props: { queue: QueueStatus; onChange: () => void; goal: Preferences }) {
   const { queue, onChange, goal } = props
   const [busy, setBusy] = useState('')
@@ -85,7 +85,7 @@ export function QueueList(props: { queue: QueueStatus; onChange: () => void; goa
 
   return (
     <section className="recent queue" aria-labelledby="queue-heading">
-      <h2 id="queue-heading">{waiting ? `Queued for later (${waiting})` : 'Analyzing now'}</h2>
+      <h2 id="queue-heading">{waiting ? `Waiting (${waiting})` : 'Analyzing now'}</h2>
       {waiting > 0 && <p className="muted queue__state">{stateLine(queue)}</p>}
       {differ > 0 && (
         <div className="queue__retarget">
@@ -93,8 +93,8 @@ export function QueueList(props: { queue: QueueStatus; onChange: () => void; goa
             {busy === 'all'
               ? 'Updating…'
               : differ === waiting
-                ? `Use the goal above for ${waiting === 1 ? 'the waiting video' : `all ${waiting} waiting videos`}`
-                : `Use the goal above for the ${differ} waiting video${differ === 1 ? '' : 's'} with another goal`}
+                ? `Use your current goal for ${waiting === 1 ? 'the waiting video' : `all ${waiting} waiting videos`}`
+                : `Use your current goal for the ${differ} waiting video${differ === 1 ? '' : 's'} with another goal`}
           </button>
           <span className="hint">{goalLine(goal)}.</span>
         </div>

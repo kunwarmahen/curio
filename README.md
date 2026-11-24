@@ -27,8 +27,9 @@ GPU is free. **Quizzes and flashcards** (with spaced repetition) test what a vid
 teaches. From Phase 4, **courses**: paste a YouTube playlist and Curio queues its
 lectures and builds one playlist from the best parts of all of them, leaving out
 what one lecture teaches again from another, with a checklist of what's easy to miss
-for your goal, and **Ask the course** answers questions from every lecture at once,
-citing the moment in each lecture. See
+for your goal. **Ask the course** answers questions from every lecture at once,
+citing the moment in each lecture, and a course quiz and flashcards cover the whole
+course playlist. See
 [docs/PROGRESS.md](docs/PROGRESS.md) for details and
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design.
 
@@ -73,6 +74,11 @@ on this machine. See "Access from your network" below.
 For frontend development, run `uv run curio api` and, in another terminal,
 `cd web && npm run dev` (http://localhost:5173, also on the LAN; proxies `/api` to port 8470).
 
+Every page has a **Menu** button (top right) for the rest of the app: Analyze a
+video, Courses, Videos (everything you've analyzed), Queue and Review flashcards,
+with counts of courses, waiting videos and cards due. The first page stays short:
+the form, the cards due today, the queue in one line, and your three latest videos.
+
 The video page shows a **watch map**: the whole video as one line, each section
 highlighted by how much it's worth (strong yellow: essential, fainter:
 recommended and optional, hatched: skip), with your playlist underlined and a
@@ -109,7 +115,7 @@ set).
 saved on the server (so every device shares them) and filled in for the next video;
 `curio analyze` and `curio queue` use them too unless you pass `--profile` or
 `--objective`. Videos waiting in the queue keep the goal they were added with; the
-queue on the home page has a button to give them the goal currently in the form.
+Queue page has a button to give them your current goal.
 
 **Queue for later** (beside "Find the best parts") adds a video to the overnight
 queue instead of analyzing it now. The server analyzes queued videos one at a time,
@@ -120,8 +126,9 @@ Before each video it checks again, so if you start using the GPU at night the qu
 waits; a video already running finishes. After each video it also writes the
 notes and a quiz with flashcards for its playlist, so they're ready in the morning
 (`CURIO_QUEUE_PREPARE=false` turns this off; if the GPU gets busy, they're skipped
-and you can write them from the video's page). The home page lists the queue with what
-it's waiting for, and each queued video can be started now or removed. Queuing a
+and you can write them from the video's page). The Queue page (in the menu) lists the
+queue with what it's waiting for, and each queued video can be started now or
+removed; the first page shows it in one line. Queuing a
 video that is already analyzed opens the existing result.
 
 **Courses.** Paste a playlist link (`youtube.com/playlist?list=…`) into the box on
@@ -140,6 +147,18 @@ lecture, it rebuilds the course playlist with the length you chose last. **Ask t
 course** searches every analyzed lecture's transcript (keywords and embeddings) and
 answers from what it finds, saying which lecture says what, with a timestamp into each
 lecture. Name a lecture ("in lecture 6…", "the guest lecture") to look there first.
+
+The course page keeps the course map, the player and the course playlist on top
+(on wide screens the playlist scrolls on its own beside the player), with tabs
+below: **Easy to miss**; **Quiz and flashcards**: one quiz across the lectures (a
+question for each section of the course playlist, checked together, each answer
+linked to the moment in its lecture) and flashcards for each section and each
+"easy to miss" point, whose answer is the point itself (these cards are the course's
+own deck in your daily review, beside each lecture's; about 7 minutes for 7
+lectures with the local model); **Ask the course**; **Repeats**: every pair of
+similar sections the model compared, as left out, other repeats, or overlaps (each
+adds something), with why; and **Lectures**, with each lecture's state, the length
+of the course playlist, and building it again.
 
 `curio analyze` prints the playlist and, with `--json out.json`, writes the full
 analysis. Results are cached in `data/curio.db`. Pass `--force` to re-analyze.
@@ -279,7 +298,10 @@ most important ones:
     which to keep) from summaries and transcript excerpts. One selection across the
     course under one budget: once one half of a repeat is chosen, the other is ruled
     out. A last call writes the checklist from the course outline; points that cite
-    no real section are dropped.
+    no real section are dropped. Every judged pair is kept with its verdict.
+    The course quiz writes one set per lecture over just its course-playlist sections
+    (one question and one card each), then one call turns each checklist point into
+    a card question.
 14. **Ask the course (LLM, on request):** every lecture's transcript blocks, numbered
     across the course. Search (BM25 plus embeddings, fused) picks passages with their
     neighbours to fill the context; a lecture the question names is searched first.

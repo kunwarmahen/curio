@@ -7,12 +7,14 @@ import {
   type CoursePart,
   type CoursePlan,
   type CourseRef,
+  type CoursePractice,
   type Citation,
 } from '../api'
 import { AskThread } from '../components/Ask'
+import { FlashcardSession } from '../components/Flashcards'
+import { QuizView } from '../components/Quiz'
 import { Player, type Clip } from '../components/Player'
 import { IMPORTANCE_LABEL, PROFILES, clock, duration, shortTitle } from '../format'
-import { BackLink } from '../components/Logo'
 import { linkProps, navigate } from '../router'
 
 const MINUTES = [60, 90, 120, 180, 240, 360]
@@ -52,7 +54,6 @@ export function CoursePage({ id }: { id: string }) {
   if (error)
     return (
       <main className="page">
-        <BackLink />
         <p className="form-error" role="alert">
           {error}
         </p>
@@ -64,7 +65,6 @@ export function CoursePage({ id }: { id: string }) {
   const prefs = course.preferences
   return (
     <main className="page course">
-      <BackLink />
       <header className="results__head">
         <h1>{course.title}</h1>
         <p className="muted">
@@ -94,7 +94,7 @@ export function CoursePage({ id }: { id: string }) {
           )}
         />
       )}
-      <Lectures course={course} onChange={reload} />
+      {course.plan?.status !== 'done' && <Lectures course={course} onChange={reload} />}
     </main>
   )
 }
@@ -200,8 +200,16 @@ function PlanSection({ course, onChange }: { course: Course; onChange: () => voi
               </p>
             </div>
           )}
-          <CoursePlayer course={course} plan={plan} />
-          {controls(course.plan_stale ? 'Build it again' : 'Build again with this length', true, course.plan_stale)}
+          <CoursePlayer
+            course={course}
+            plan={plan}
+            lectures={
+              <>
+                <Lectures course={course} onChange={onChange} inTab />
+                {controls(course.plan_stale ? 'Build it again' : 'Build again with this length', true, course.plan_stale)}
+              </>
+            }
+          />
         </>
       )}
     </section>
@@ -213,8 +221,12 @@ interface Now {
   ref: CourseRef | null // playing a section that isn't a part (from the checklist or a repeat)
 }
 
-function CoursePlayer({ course, plan }: { course: Course; plan: CoursePlan }) {
+type CourseTab = 'miss' | 'practice' | 'ask' | 'repeats' | 'lectures'
+
+function CoursePlayer({ course, plan, lectures: lecturesTab }: { course: Course; plan: CoursePlan; lectures: React.ReactNode }) {
   const parts = plan.parts
+  const [tab, setTab] = useState<CourseTab>(plan.checklist.length ? 'miss' : 'ask')
+  const repeatCount = plan.pairs ? plan.pairs.filter((p) => p.relation === 'repeat').length : plan.repeats.length
   const lectures = useMemo(() => new Map(course.lectures.map((l) => [l.position, l])), [course.lectures])
   const [firstVideo] = useState(parts[0]?.video_id ?? '')
   const [watched, setWatched] = useState<Set<string>>(new Set())
@@ -446,9 +458,30 @@ function CoursePlayer({ course, plan }: { course: Course; plan: CoursePlan }) {
         </aside>
       </div>
 
-      {plan.checklist.length > 0 && (
-        <section className="course__section" aria-labelledby="miss-heading">
-          <h2 id="miss-heading">Easy to miss</h2>
+      <section className="extras course__extras">
+        <div className="tabs" role="tablist" aria-label="More about this course">
+          {plan.checklist.length > 0 && (
+            <CourseTabButton id="miss" tab={tab} setTab={setTab}>
+              Easy to miss ({plan.checklist.length})
+            </CourseTabButton>
+          )}
+          <CourseTabButton id="practice" tab={tab} setTab={setTab}>
+            Quiz and flashcards
+          </CourseTabButton>
+          <CourseTabButton id="ask" tab={tab} setTab={setTab}>
+            Ask the course
+          </CourseTabButton>
+          <CourseTabButton id="repeats" tab={tab} setTab={setTab}>
+            Repeats{repeatCount ? ` (${repeatCount})` : ''}
+          </CourseTabButton>
+          <CourseTabButton id="lectures" tab={tab} setTab={setTab}>
+            Lectures ({course.lectures.length})
+          </CourseTabButton>
+        </div>
+        <div className="tabpanel" role="tabpanel" id={`course-panel-${tab}`} aria-labelledby={`course-tab-${tab}`}>
+          {tab === 'miss' && (
+<section className="course__section" aria-labelledby="miss-heading">
+          <h2 id="miss-heading" className="visually-hidden">Easy to miss</h2>
           <p className="muted">
             {course.preferences.custom_objective
               ? `Points from the course that matter for your goal, “${course.preferences.custom_objective}”.`
@@ -472,9 +505,11 @@ function CoursePlayer({ course, plan }: { course: Course; plan: CoursePlan }) {
             ))}
           </ul>
         </section>
-      )}
-
-      <CourseAsk
+          )}
+          {tab === 'practice' && <CoursePracticePanel course={course} label={label} onPlay={playAt} />}
+          {tab === 'ask' && (
+<CourseAsk
+        inTab
         course={course}
         citation={(c) => (
           <button
@@ -487,27 +522,12 @@ function CoursePlayer({ course, plan }: { course: Course; plan: CoursePlan }) {
           </button>
         )}
       />
-
-      {plan.repeats.length > 0 && (
-        <section className="course__section" aria-labelledby="repeats-heading">
-          <h2 id="repeats-heading">Left out: taught in another lecture</h2>
-          <ul className="repeats">
-            {plan.repeats.map((r) => (
-              <li key={`${r.section.video_id}:${r.section.section_id}:${r.covered_by.section_id}`}>
-                <p>
-                  <RefButton ref_={r.section} label={label(r.section.lecture)} onPlay={playRef} />{' '}
-                  <strong>{r.section.title}</strong> is covered by{' '}
-                  <RefButton ref_={r.covered_by} label={label(r.covered_by.lecture)} onPlay={playRef} />{' '}
-                  {r.covered_by.title}.
-                </p>
-                {r.reason && <p className="muted">{r.reason}</p>}
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
-
-      {plan.warnings.length > 0 && (
+          )}
+          {tab === 'repeats' && <RepeatsPanel plan={plan} label={label} onPlay={playRef} />}
+          {tab === 'lectures' && (
+            <>
+              {lecturesTab}
+{plan.warnings.length > 0 && (
         <details className="notesheet__warnings">
           <summary>
             {plan.warnings.length} thing{plan.warnings.length === 1 ? '' : 's'} to know about this playlist
@@ -519,7 +539,264 @@ function CoursePlayer({ course, plan }: { course: Course; plan: CoursePlan }) {
           </ul>
         </details>
       )}
+            </>
+          )}
+        </div>
+      </section>
     </>
+  )
+}
+
+/** A quiz and flashcards for the whole course playlist, one set per lecture. */
+function CoursePracticePanel(props: { course: Course; label: (n: number) => string; onPlay: (c: Citation) => void }) {
+  const { course, label, onPlay } = props
+  const [practice, setPractice] = useState<CoursePractice | null>(null)
+  const [mode, setMode] = useState<'quiz' | 'cards'>('quiz')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  const [tick, setTick] = useState(0)
+  const running = practice?.status === 'running' || practice?.status === 'pending'
+
+  useEffect(() => {
+    let timer: number | undefined
+    api.coursePractice(course.id).then(
+      (p) => {
+        setPractice(p)
+        if (p.status === 'running' || p.status === 'pending') timer = window.setTimeout(() => setTick((n) => n + 1), 3000)
+      },
+      () => setPractice({ course_id: course.id, sets: [], status: null, progress: '', stale: false, questions: 0, cards: 0 }),
+    )
+    return () => window.clearTimeout(timer)
+  }, [course.id, tick])
+
+  const write = async (force: boolean) => {
+    setBusy(true)
+    setErr('')
+    try {
+      setPractice(await api.writeCoursePractice(course.id, force))
+      setTick((n) => n + 1)
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : 'Could not start writing the course quiz.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const lectureOf = (analysisId: string) => course.lectures.find((l) => l.analysis_id === analysisId)
+  const play = (analysisId: string, t: number) => {
+    const lec = lectureOf(analysisId)
+    if (lec) onPlay({ start_s: t, video_id: lec.video_id, analysis_id: analysisId, lecture: lec.position })
+  }
+
+  if (!practice) return <p className="muted">Loading…</p>
+  const done = practice.sets.filter((x) => x.study.status === 'done' && x.study.questions.length)
+  const parts = course.plan?.parts.length ?? 0
+
+  return (
+    <section className="course__section practice" aria-labelledby="practice-heading">
+      <h2 id="practice-heading" className="visually-hidden">
+        Quiz and flashcards for the course
+      </h2>
+      {err && (
+        <p className="form-error" role="alert">
+          {err}
+        </p>
+      )}
+      {practice.status === null && (
+        <div className="notes__start">
+          <p className="muted">
+            A quiz on the {parts} parts of the course playlist, one question for each section, and a flashcard for each
+            section and for each point under Easy to miss. The cards join your review deck. With a local model this
+            takes about half a minute per lecture.
+          </p>
+          <button type="button" className="button-primary" onClick={() => write(false)} disabled={busy}>
+            {busy ? 'Starting…' : 'Write the course quiz and flashcards'}
+          </button>
+        </div>
+      )}
+      {running && (
+        <p className="notes__progress" aria-live="polite">
+          {practice.progress || 'Waiting to start'}…
+        </p>
+      )}
+      {practice.status === 'failed' && (
+        <div className="notes__start">
+          <p className="form-error" role="alert">
+            Writing the course quiz stopped: {practice.sets.find((x) => x.study.error)?.study.error || 'unknown error.'}
+          </p>
+          <button type="button" className="button-primary" onClick={() => write(true)} disabled={busy}>
+            Try again
+          </button>
+        </div>
+      )}
+      {practice.status === 'done' && (
+        <>
+          {practice.stale && (
+            <div className="course__stale" role="status">
+              <p>The course playlist changed since this quiz was written. Write it again to cover the new parts.</p>
+            </div>
+          )}
+          <div className="practice__bar">
+            <fieldset className="segmented practice__mode">
+              <legend className="visually-hidden">Quiz or flashcards</legend>
+              <label className="segmented__option">
+                <input type="radio" name="course-mode" checked={mode === 'quiz'} onChange={() => setMode('quiz')} />
+                <span>Quiz ({practice.questions})</span>
+              </label>
+              <label className="segmented__option">
+                <input type="radio" name="course-mode" checked={mode === 'cards'} onChange={() => setMode('cards')} />
+                <span>Flashcards ({practice.cards})</span>
+              </label>
+            </fieldset>
+            <button
+              type="button"
+              className={practice.stale ? 'button-primary' : 'button-quiet'}
+              onClick={() => write(true)}
+              disabled={busy}
+            >
+              Write new questions
+            </button>
+          </div>
+          {mode === 'quiz' && (
+            <QuizView
+              key={done.map((x) => x.study.id).join()}
+              sets={done.map((x) => ({
+                study: x.study,
+                heading: `${label(x.lecture)}: ${shortTitle(lectureOf(x.study.analysis_id)?.title ?? '')}`,
+              }))}
+              onSeek={(t, st) => play(st.analysis_id, t)}
+            />
+          )}
+          {mode === 'cards' && (
+            <>
+              <FlashcardSession
+                courseId={course.id}
+                onSeek={(t, due) => play(due.analysis_id, t)}
+                label={(due) => {
+                  const lec = lectureOf(due.analysis_id)
+                  return lec ? `${lec.label}: ${shortTitle(lec.title)}` : due.video_title
+                }}
+              />
+              <p className="hint">
+                These cards are also in your daily <a {...linkProps('/review')}>review</a>, with every video's.
+              </p>
+            </>
+          )}
+        </>
+      )}
+    </section>
+  )
+}
+
+/** What the model found comparing similar sections of different lectures. */
+function RepeatsPanel(props: { plan: CoursePlan; label: (n: number) => string; onPlay: (r: CourseRef) => void }) {
+  const { plan, label, onPlay } = props
+  const pairs = plan.pairs
+  const leftOut = new Set(plan.repeats.map((r) => `${r.section.video_id}:${r.section.section_id}`))
+  const other = (pairs ?? []).filter(
+    (p) =>
+      p.relation === 'repeat' &&
+      !leftOut.has(`${p.a.video_id}:${p.a.section_id}`) &&
+      !leftOut.has(`${p.b.video_id}:${p.b.section_id}`),
+  )
+  const overlaps = (pairs ?? []).filter((p) => p.relation === 'overlap')
+  const different = (pairs ?? []).filter((p) => p.relation === 'different').length
+  const ref = (r: CourseRef, inPlaylist?: boolean) => (
+    <>
+      <RefButton ref_={r} label={label(r.lecture)} onPlay={onPlay} /> <strong>{r.title}</strong>
+      {inPlaylist && <span className="checklist__in">in your playlist</span>}
+    </>
+  )
+  return (
+    <section className="course__section" aria-labelledby="repeats-heading">
+      <h2 id="repeats-heading" className="visually-hidden">
+        Repeats across lectures
+      </h2>
+      {pairs ? (
+        <p className="muted">
+          Curio compared {pairs.length} pairs of similar sections in different lectures:{' '}
+          {pairs.filter((p) => p.relation === 'repeat').length}{' '}
+          teach the same thing, {overlaps.length} overlap (each adds something) and {different} only sound alike. Play
+          either side to compare.
+        </p>
+      ) : (
+        <p className="muted">
+          This playlist was built before Curio kept its comparisons. Build it again (in Lectures) to see every pair it
+          checked.
+        </p>
+      )}
+
+      {plan.repeats.length > 0 && (
+        <>
+          <h3 className="repeats__heading">Left out: taught in another lecture</h3>
+          <ul className="repeats">
+            {plan.repeats.map((r) => (
+              <li key={`${r.section.video_id}:${r.section.section_id}:${r.covered_by.section_id}`}>
+                <p>
+                  {ref(r.section)} is covered by {ref(r.covered_by, true)}.
+                </p>
+                {r.reason && <p className="muted">{r.reason}</p>}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+
+      {other.length > 0 && (
+        <>
+          <h3 className="repeats__heading">Also repeats, neither left out</h3>
+          <p className="muted">Teach the same thing; one half is in your playlist or neither made the cut.</p>
+          <ul className="repeats">
+            {other.map((p) => (
+              <li key={`${p.a.video_id}:${p.a.section_id}:${p.b.section_id}`}>
+                <p>
+                  {ref(p.a, p.a_in_playlist)} and {ref(p.b, p.b_in_playlist)}
+                </p>
+                {p.reason && <p className="muted">{p.reason}</p>}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+
+      {overlaps.length > 0 && (
+        <>
+          <h3 className="repeats__heading">Overlaps: the same topic, each adds something</h3>
+          <ul className="repeats">
+            {overlaps.map((p) => (
+              <li key={`${p.a.video_id}:${p.a.section_id}:${p.b.section_id}`}>
+                <p>
+                  {ref(p.a, p.a_in_playlist)} and {ref(p.b, p.b_in_playlist)}
+                </p>
+                {p.reason && <p className="muted">{p.reason}</p>}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </section>
+  )
+}
+
+function CourseTabButton(props: {
+  id: CourseTab
+  tab: CourseTab
+  setTab: (t: CourseTab) => void
+  children: React.ReactNode
+}) {
+  const selected = props.tab === props.id
+  return (
+    <button
+      type="button"
+      role="tab"
+      id={`course-tab-${props.id}`}
+      aria-selected={selected}
+      aria-controls={`course-panel-${props.id}`}
+      className="tab"
+      onClick={() => props.setTab(props.id)}
+    >
+      {props.children}
+    </button>
   )
 }
 
@@ -528,7 +805,8 @@ function lectureLabel(course: Course, position: number): string {
 }
 
 /** Ask the course: questions answered from every analyzed lecture. */
-function CourseAsk({ course, citation }: { course: Course; citation: (c: Citation) => React.ReactNode }) {
+function CourseAsk(props: { course: Course; citation: (c: Citation) => React.ReactNode; inTab?: boolean }) {
+  const { course, citation } = props
   const id = course.id
   const analyzed = course.lectures.filter((l) => l.analysis_id).length
   const load = useMemo(
@@ -538,7 +816,9 @@ function CourseAsk({ course, citation }: { course: Course; citation: (c: Citatio
   const goal = course.preferences.custom_objective
   return (
     <section className="course__section" aria-labelledby="ask-course-heading">
-      <h2 id="ask-course-heading">Ask the course</h2>
+      <h2 id="ask-course-heading" className={props.inTab ? 'visually-hidden' : undefined}>
+        Ask the course
+      </h2>
       <AskThread
         subject="course"
         intro={`Ask anything about the course. Curio searches all ${analyzed} analyzed lectures and answers from their transcripts, citing the moment in each lecture. Name a lecture ("in lecture 6…") to look there first.`}
@@ -637,7 +917,7 @@ const STATE_LABEL: Record<CourseLecture['state'], string> = {
   missing: 'Not analyzed',
 }
 
-function Lectures({ course, onChange }: { course: Course; onChange: () => void }) {
+function Lectures({ course, onChange, inTab }: { course: Course; onChange: () => void; inTab?: boolean }) {
   const [busy, setBusy] = useState('')
   const [err, setErr] = useState('')
 
@@ -661,7 +941,9 @@ function Lectures({ course, onChange }: { course: Course; onChange: () => void }
 
   return (
     <section className="course__section" aria-labelledby="lectures-heading">
-      <h2 id="lectures-heading">Lectures</h2>
+      <h2 id="lectures-heading" className={inTab ? 'visually-hidden' : undefined}>
+        Lectures
+      </h2>
       {err && (
         <p className="form-error" role="alert">
           {err}

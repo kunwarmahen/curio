@@ -347,7 +347,8 @@ method, more depth, a new example, results). Both are worth watching.
   - "different": they share words, not content.
 - keep: "A" or "B", the one to watch if only one: the more complete and clearer explanation \
 for this learner. For "overlap" and "different", the one that matters more for the learner.
-- reason: one short sentence. For "repeat", what both teach. For "overlap", what B adds to A.
+- reason: one short sentence. For "repeat", what both teach. For "overlap", what the later \
+section adds. Name the sections by their lecture ("Lecture 8 adds…"), never as A and B.
 
 Judge from the summaries and excerpts only. Return one entry per pair id, in order."""
 
@@ -413,3 +414,15 @@ def course_ask_shared_prefix(*, title: str, brief: str, outline: str, transcript
         f"Course: {title}\n\n{brief}\n\nCourse outline (lecture, then section [start] title):\n{outline}\n\n"
         f"{which}:\n<transcripts>\n{transcript}\n</transcripts>"
     )
+
+
+CHECKLIST_CARDS_SYSTEM = """You turn points a learner must remember into flashcard questions. \
+Each point is a statement from a course. Write the front of a card whose answer is the \
+point: a specific question that makes the learner recall it ("What happens to reader \
+accuracy when a RAG pipeline retrieves more than 10-20 documents?"), not a yes/no \
+question and not a restatement of the point. Use the point's own terms; add nothing it \
+doesn't say. One card per point, with its number."""
+
+
+def checklist_cards_user(*, points: str, count: int) -> str:
+    return f"{points}\n\nWrite {count} cards, one for each point number."
