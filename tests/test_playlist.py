@@ -83,9 +83,9 @@ def test_prerequisite_chain_never_crowds_out_target():
     # Regression from the first real run: S03 builds on S02, which builds on S01.
     # Pulling the chain in recursively used the budget and dropped S03 itself.
     secs = [scored(0, 99), scored(1, 72), scored(2, 72, builds_on=["S01"]), scored(3, 95, builds_on=["S02"])]
-    chosen = select_sections(secs, budget_s=400, config=CFG)
+    chosen = select_sections(secs, budget_s=400, config=CFG)  # room for three
     assert {"S00", "S03"} <= chosen
-    assert "S01" not in chosen  # prerequisites of prerequisites are not pulled in
+    assert "S02" in chosen and "S01" not in chosen  # the direct prerequisite wins the tie
 
 
 def test_adjacent_sections_merge_and_playlist_is_chronological():
@@ -200,3 +200,17 @@ def test_validation_accepts_boundaries_next_to_a_cut_out_ad():
         cue_ends=cue_ends,
     )
     assert not any("caption times" in w for w in report.warnings), report.warnings
+
+
+def test_one_long_section_does_not_crowd_out_several_nearly_as_good():
+    # MIT 6.006 lecture 1: a 10-minute proof scored 100 left out efficiency (87, 5 min)
+    # and complexity classes (93, 6 min) from a 14-minute playlist.
+    proof = scored(0, 100, dur=618)
+    efficiency = scored(1, 87, dur=300)
+    classes = scored(2, 93, dur=360)
+    chosen = select_sections([proof, efficiency, classes], budget_s=14 * 60, config=CFG)
+    assert chosen == {"S01", "S02"}
+    # When nothing else is close, the long top section still goes in.
+    weak = scored(1, 60, dur=300)
+    chosen = select_sections([proof, weak, scored(2, 62, dur=360)], budget_s=14 * 60, config=CFG)
+    assert "S00" in chosen

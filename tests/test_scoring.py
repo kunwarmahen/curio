@@ -110,17 +110,33 @@ def test_outline_key_concepts_alone_earn_no_bonus():
     assert not any(a.rule == "new_concepts" for a in scored[0].score.adjustments)
 
 
-def test_within_video_rank_spreads_inflated_scores():
-    # A model that rates everything 8-9 should not make every section essential.
+def test_within_video_rank_stays_on_the_models_scale():
+    # Rank calibration orders sections within the range the model used for this video's
+    # content; it no longer stretches bunched ratings across 0-100 (which dragged solid
+    # sections of an all-strong video down a tier). The playlist caps essentials.
     secs = [section(i) for i in range(8)]
     evs = {s.id: ev(s.id, 8 + i * 0.14) for i, s in enumerate(secs)}
     scored = score_sections(secs, evs, LearningPreferences(), ScoringConfig(weights=W))
-    tiers = [s.importance for s in scored]
-    assert tiers.count(Importance.ESSENTIAL) <= len(secs) / 2
     best = max(scored, key=lambda s: s.score.weighted_rubric)
     worst = min(scored, key=lambda s: s.score.weighted_rubric)
-    assert best.score.final - worst.score.final > 40
-    assert any(a.rule == "within_video_rank" and "Ranked 1 of 8" in a.reason for a in best.score.adjustments)
+    spread = best.score.weighted_rubric - worst.score.weighted_rubric
+    assert best.score.final - worst.score.final < spread + 10  # new-concept bonuses aside
+    assert [s.section.id for s in sorted(scored, key=lambda s: s.score.final)] == [s.id for s in secs]
+    assert all(s.importance is Importance.ESSENTIAL for s in scored)  # the model rated them all strong
+
+
+def test_within_video_rank_spreads_a_wide_range_and_ignores_intros():
+    secs = [section(0, SectionKind.INTRO), *[section(i) for i in range(1, 6)]]
+    ratings = [1.5, 3.0, 5.0, 6.0, 8.0, 9.0]
+    evs = {s.id: ev(s.id, r) for s, r in zip(secs, ratings, strict=True)}
+    scored = score_sections(secs, evs, LearningPreferences(), ScoringConfig(weights=W))
+    assert not any(a.rule == "within_video_rank" for a in scored[0].score.adjustments)
+    # The best and worst content keep their own ratings (the ends of the range) ...
+    for s in (scored[1], scored[5]):
+        assert not any(a.rule == "within_video_rank" for a in s.score.adjustments)
+    # ... and the rest move a little toward their place in that range, not toward 0 or 100.
+    second = next(a for a in scored[2].score.adjustments if a.rule == "within_video_rank")
+    assert "Ranked 4 of 5" in second.reason and -6 < second.delta < 0
 
 
 def test_profile_changes_ranking():
@@ -163,8 +179,6 @@ def test_solid_content_ranked_low_stays_optional_not_skip():
     scored = score_sections(secs, evs, LearningPreferences(), ScoringConfig(weights=W))
     low = scored[0]
     assert low.importance is Importance.OPTIONAL
-    floor = next(a for a in low.score.adjustments if a.rule == "content_floor")
-    assert "rated it 51/100" in floor.reason
     assert low.score.final == pytest.approx(
         low.score.weighted_rubric + sum(a.delta for a in low.score.adjustments), abs=0.15
     )
@@ -178,3 +192,13 @@ def test_weak_or_redundant_content_can_still_be_skipped():
     scored = score_sections(secs, evs, LearningPreferences(), ScoringConfig(weights=W))
     assert scored[0].importance is Importance.SKIP
     assert not any(a.rule == "content_floor" for a in scored[1].score.adjustments)
+
+
+def test_learner_brief_steers_ratings_for_own_goals_and_deep_dives():
+    from curio_learn.analysis.profiles import learner_brief
+
+    own = learner_brief(LearningPreferences(custom_objective="I know about agents; what may I have missed?"))
+    assert "already knows" in own and "low on novelty" in own and "what may I have missed" in own
+    assert "already knows" not in learner_brief(LearningPreferences())
+    deep = learner_brief(LearningPreferences(profile=LearningProfile.DEEP_DIVE))
+    assert "framework or mental model" in deep

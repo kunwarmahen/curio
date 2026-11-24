@@ -37,6 +37,8 @@ KIND_PRIOR: dict[SectionKind, float] = {
 }
 ALWAYS_SKIP = {SectionKind.SPONSOR, SectionKind.META}
 CONTENT_KINDS = {SectionKind.CORE, SectionKind.EXAMPLE, SectionKind.DEMO}
+# Sections ranked against each other for calibration: the teaching, including Q&A.
+RANKED_KINDS = CONTENT_KINDS | {SectionKind.QA}
 
 
 @dataclass(frozen=True)
@@ -73,8 +75,9 @@ def score_sections(
     spec = spec_for(prefs)
     base = {s.id: weighted_rubric(evaluations[s.id], weights) for s in sections}
     index = {s.id: i for i, s in enumerate(sections)}
-    # Rank only real content: sponsor reads and housekeeping would distort percentiles.
-    relative, rank_of = _relative_scores({s.id: base[s.id] for s in sections if s.kind not in ALWAYS_SKIP})
+    # Rank only the teaching against itself: intros, recaps, outros and housekeeping
+    # have their own kind priors and would stretch the range.
+    relative, rank_of = _relative_scores({s.id: base[s.id] for s in sections if s.kind in RANKED_KINDS})
     pool = len(relative)
 
     seen_concepts: set[str] = set()
@@ -125,9 +128,11 @@ def score_sections(
                 )
             )
 
-        # Calibration: LLM rubric scores drift upward (a local model may rate almost
-        # everything 7-10), so half of the base score comes from the section's rank
-        # within this video. Tiers then separate the best sections from the rest.
+        # Calibration: half of the base score comes from the section's rank within this
+        # video, placed on the range of ratings the model gave this video's content.
+        # That spreads out ratings bunched together, without dragging down solid
+        # sections of a video whose content is all strong (a 0-100 percentile turned a
+        # Kubernetes basics section rated 82 into 65).
         if pool > 1 and s.id in relative:
             delta = round(0.5 * (relative[s.id] - base[s.id]), 1)
             if abs(delta) >= 0.5:
@@ -188,14 +193,18 @@ def score_sections(
 
 
 def _relative_scores(base: dict[str, float]) -> tuple[dict[str, float], dict[str, int]]:
-    """Percentile (0-100) of each base score within the video; ties share a percentile."""
+    """Each base score's percentile within the video, placed on the range of the base
+    scores (lowest to highest); ties share a percentile. Also each one's rank."""
+    if not base:
+        return {}, {}
     ordered = sorted(base.values())
-    n = len(ordered)
+    n, lo, hi = len(ordered), ordered[0], ordered[-1]
     relative, rank_of = {}, {}
     for sid, value in base.items():
         below = sum(1 for v in ordered if v < value)
         equal = sum(1 for v in ordered if v == value)
-        relative[sid] = 100.0 * (below + (equal - 1) / 2) / (n - 1) if n > 1 else 50.0
+        pct = (below + (equal - 1) / 2) / (n - 1) if n > 1 else 0.5
+        relative[sid] = lo + pct * (hi - lo)
         rank_of[sid] = 1 + sum(1 for v in ordered if v > value)
     return relative, rank_of
 

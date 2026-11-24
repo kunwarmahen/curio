@@ -52,8 +52,10 @@ PROFILES: dict[LearningProfile, ProfileSpec] = {
     LearningProfile.DEEP_DIVE: ProfileSpec(
         label="Deep Dive",
         brief="An expert who wants depth. Prioritize advanced concepts, subtle arguments, "
-        "novel insights, contrarian viewpoints and detailed technical discussion. "
-        "Basic explanations are less valuable.",
+        "novel insights, contrarian viewpoints and detailed technical discussion. A "
+        "speaker's own framework or mental model for the field (a new way to think about "
+        "it) is a novel insight even without technical detail. Basic explanations are "
+        "less valuable.",
         weight_multipliers={"depth": 1.6, "novelty": 1.3, "educational_value": 0.9},
         kind_bias={SectionKind.QA: 3, SectionKind.INTRO: -4, SectionKind.RECAP: -4},
         budget_fraction=0.45,
@@ -72,6 +74,10 @@ def learner_brief(prefs: LearningPreferences) -> str:
         brief += (
             "\nThe learner's own objective (this takes priority when judging relevance): "
             f'"{prefs.custom_objective.strip()}"'
+            "\nIf the objective says what the learner already knows, explanations of that "
+            "score low on novelty and relevance however well they are made; what the "
+            "objective asks for (for example pitfalls, or what they may have missed) scores "
+            "high on relevance."
         )
     return brief
 

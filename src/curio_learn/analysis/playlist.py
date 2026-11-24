@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 from curio_learn.domain import (
@@ -43,6 +44,13 @@ def _value(s: ScoredSection) -> float:
     return (s.score.final / 100) ** 2 * s.section.duration_s
 
 
+def _pick_value(s: ScoredSection) -> float:
+    """What a section adds to a playlist: quality cubed (so a strong section beats
+    several middling ones) times the square root of its length (a 10-minute section on
+    one topic teaches more than a 5-minute one, but not twice as much)."""
+    return (s.score.final / 100) ** 3 * math.sqrt(s.section.duration_s / 60)
+
+
 def select_sections(
     scored: list[ScoredSection],
     budget_s: float,
@@ -51,7 +59,75 @@ def select_sections(
     excludes: dict[str, set[str]] | None = None,
 ) -> set[str]:
     """Best sections that fit the budget. `excludes` maps a section to the ones it rules
-    out once chosen (a course's repeats: the same material in another lecture)."""
+    out once chosen (a course's repeats: the same material in another lecture).
+
+    A video's playlist is the set with the most total `_pick_value` that fits (a small
+    knapsack), then the direct prerequisites of its sections that still fit. Before
+    this, sections went in by score, and one long top section could crowd out several
+    nearly as good (MIT 6.006 lecture 1: a 10-minute proof scored 100 left out
+    efficiency and complexity classes, 87 and 93, from a 14-minute playlist). With
+    `excludes` (courses) the greedy selection is used."""
+    if not excludes:
+        return _knapsack(scored, budget_s, config)
+    return _greedy(scored, budget_s, config, excludes=excludes)
+
+
+def _knapsack(scored: list[ScoredSection], budget_s: float, config: PlaylistConfig) -> set[str]:
+    unit = 5.0  # seconds per step: fine enough for any budget, small tables
+    items = [s for s in scored if s.importance != Importance.SKIP]
+    if not items:
+        return set()
+    lead = config.lead_in_s + config.tail_s
+    cost = [math.ceil((s.section.duration_s + lead) / unit) for s in items]
+    # A section that better sections build on is worth a little more (10% per such
+    # section, up to two), so a prerequisite wins a near tie with an unrelated section.
+    score_of = {s.section.id: s.score.final for s in items}
+    dependants: dict[str, int] = {}
+    for s in items:
+        for p in set(s.evaluation.builds_on):
+            if p in score_of and s.score.final > score_of[p]:
+                dependants[p] = dependants.get(p, 0) + 1
+    value = [_pick_value(s) * (1 + 0.1 * min(2, dependants.get(s.section.id, 0))) for s in items]
+    limit = budget_s * config.budget_tolerance
+    cap = int(limit // unit)
+    best = [0.0] * (cap + 1)
+    take = [[False] * (cap + 1) for _ in items]
+    for i, (c, v) in enumerate(zip(cost, value, strict=True)):
+        for w in range(cap, c - 1, -1):
+            if best[w - c] + v > best[w] + 1e-12:
+                best[w] = best[w - c] + v
+                take[i][w] = True
+    chosen: set[str] = set()
+    w = cap
+    for i in range(len(items) - 1, -1, -1):
+        if take[i][w]:
+            chosen.add(items[i].section.id)
+            w -= cost[i]
+    if not chosen:  # nothing fits: take the single best section anyway
+        return {max(items, key=lambda s: s.score.final).section.id}
+
+    # Direct prerequisites of the chosen sections, best sections first, when they fit.
+    by_id = {s.section.id: s for s in scored}
+    used = sum(by_id[x].section.duration_s + lead for x in chosen)
+    for sid in sorted(chosen, key=lambda x: -by_id[x].score.final):
+        for p in by_id[sid].evaluation.builds_on:
+            pre = by_id.get(p)
+            if pre is None or p in chosen or _RANK[pre.importance] < _RANK[Importance.RECOMMENDED]:
+                continue
+            if used + pre.section.duration_s + lead <= limit:
+                chosen.add(p)
+                used += pre.section.duration_s + lead
+    return chosen
+
+
+def _greedy(
+    scored: list[ScoredSection],
+    budget_s: float,
+    config: PlaylistConfig,
+    *,
+    excludes: dict[str, set[str]] | None = None,
+) -> set[str]:
+    """Sections by tier and score, each with its prerequisites when the bundle fits."""
     by_id = {s.section.id: s for s in scored}
     limit = budget_s * config.budget_tolerance
     chosen: set[str] = set()

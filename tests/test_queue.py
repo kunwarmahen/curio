@@ -438,7 +438,7 @@ def test_relabeling_saved_analyses_changes_only_labels(service):
         }
     )
     service.repo.save_result(old)
-    service.set_custom_playlist(a.id, [g.id for g in a.segments][:2])
+    mine = service.set_custom_playlist(a.id, [g.id for g in a.segments][:2])
 
     assert service.relabel_saved() == {a.id: 1}
     new = service.get(a.id)
@@ -449,5 +449,5 @@ def test_relabeling_saved_analyses_changes_only_labels(service):
     assert seg.importance is Importance.RECOMMENDED
     assert new.playlist.model_dump() == a.playlist.model_dump()
     assert [g.id for g in new.segments] == [g.id for g in a.segments]
-    assert service.custom_playlist(a.id) == [g.id for g in a.segments][:2]
+    assert service.custom_playlist(a.id) == mine
     assert service.relabel_saved() == {}  # nothing left to change

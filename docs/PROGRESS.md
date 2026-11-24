@@ -562,12 +562,44 @@ With the 11 CS329Z lectures and the earlier podcast, Kubernetes and PostgreSQL r
   playlist unchanged. The pipeline version isn't bumped, so nothing is re-analyzed.
 - 4 new tests (170 in total).
 
+### Ranking misses fixed (2026-11-24)
+The three misses from the calibration, checked offline on all 19 analyses (scoring and
+selection) and with re-run evaluations (prompts):
+1. **All-strong videos dragged down.** Rank calibration now ranks only teaching sections
+   (core, example, demo, Q&A) against each other, on the range of ratings the model gave
+   them instead of 0–100. Kubernetes for beginners: "What is Kubernetes" 65 → 86,
+   architecture 61 → 84, Ingress and Volumes up to recommended. Across 19 analyses,
+   skips fell 110 → 91, mostly low-rated Q&A sections now optional.
+2. **One long section crowding out several.** Video playlists are now a knapsack over
+   (score/100)³ × √minutes, plus prerequisites that fit. MIT lecture 1 now covers
+   definitions, an example algorithm and efficiency instead of a 10-minute proof;
+   Lecture 1 (experienced learner) now includes reliability, failure cases and privacy;
+   the tools lecture swaps 9 minutes of Toolformer for lost-in-the-middle, AST
+   evaluation, JSON function calling and pass^k. Playlists hold 142 sections instead of
+   133 in the same time. A prerequisite of a better section wins ties.
+3. **The model's ratings for the goal.** Two prompt changes kept, each tested over two
+   evaluation runs against two with the old prompt (runs vary 10–20 points per section):
+   - Deep dive: a speaker's own framework counts as novel insight. Karpathy's "LLM as
+     an operating system" 35 / 29 → 71 / 78; jailbreaks and data poisoning up 8–10.
+   - Own goal: what the learner says they know is low novelty and relevance, what they
+     ask for is high relevance. Lecture 1: LLM-era basics 73 / 54 → 47 / 31, agent
+     anatomy 84 / 76 → 68 / 66, reliability up; but the debugging-framework section
+     also fell (88 / 68 → 59 / 55).
+   - Dropped: a beginner sentence ("what it is and how its parts fit come first") moved
+     nothing for Kubernetes (82 / 79 → 77 / 76) and lifted MIT's course logistics.
+- 4 new tests (173 in total). Saved analyses keep their scores; new analyses get all of
+  this (the pipeline version isn't bumped).
+
 ### Known gaps / next steps
 - The Anthropic provider has not been run against the live API (no credentials
   here); `curio check-claude` checks it with one tiny request.
-- Ranking misses that thresholds can't fix (see the 2026-11-24 calibration): the
-  model's ratings for a learner's own goal, within-video rank in all-strong videos,
-  and long sections crowding out several shorter ones.
+- Beginner foundations: the model still rates "what is X and how its parts fit"
+  below hands-on sections (Kubernetes: 77–82 vs. 85–99), so a short beginner playlist
+  can leave them out. A prompt sentence didn't help.
+- With the learner's own goal, sections the goal asks for can be marked down along with
+  what they know (Lecture 1's debugging framework).
+- Course playlists still select greedily (they need repeat exclusions), so a long
+  section can crowd out shorter ones there.
 - The lexical redundancy threshold (0.45) wasn't examined in this calibration.
 - Repeat vs overlap verdicts vary run to run.
 - The made-up-names check covers names, not plain-word claims or numbers.
