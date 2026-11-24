@@ -13,7 +13,15 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from curio_learn.config import PROJECT_ROOT, get_settings
-from curio_learn.domain import AnalysisStatus, Block, LearningNotes, LearningPreferences, NotesScope, VideoAnalysis
+from curio_learn.domain import (
+    AnalysisStatus,
+    Answer,
+    Block,
+    LearningNotes,
+    LearningPreferences,
+    NotesScope,
+    VideoAnalysis,
+)
 from curio_learn.errors import CurioError, InvalidURL
 from curio_learn.logging_setup import configure_logging
 from curio_learn.service import CurioService
@@ -41,6 +49,10 @@ class NotesRequest(BaseModel):
     scope: NotesScope = NotesScope.PLAYLIST
     segment_ids: list[str] = []
     force: bool = False
+
+
+class AskRequest(BaseModel):
+    question: str
 
 
 class NotesAccepted(BaseModel):
@@ -155,6 +167,23 @@ def create_app(service: CurioService | None = None) -> FastAPI:
             media_type="text/markdown; charset=utf-8",
             headers={"Content-Disposition": f'attachment; filename="curio-notes-{notes_id}.md"'},
         )
+
+    @app.post("/api/v1/analyses/{analysis_id}/questions", response_model=Answer)
+    def ask(analysis_id: str, body: AskRequest, request: Request):
+        # Synchronous: an answer takes seconds, not minutes, and runs beside analyses
+        # (Ollama queues concurrent requests itself).
+        try:
+            return svc(request).ask(analysis_id, body.question)
+        except KeyError:
+            raise HTTPException(404, {"code": "not_found", "message": "Unknown analysis id"}) from None
+
+    @app.get("/api/v1/analyses/{analysis_id}/questions", response_model=list[Answer])
+    def conversation(analysis_id: str, request: Request):
+        return svc(request).conversation(analysis_id)
+
+    @app.delete("/api/v1/analyses/{analysis_id}/questions")
+    def clear_conversation(analysis_id: str, request: Request):
+        return {"deleted": svc(request).clear_conversation(analysis_id)}
 
     @app.get("/api/v1/videos/recent", response_model=list[RecentVideo])
     def recent(request: Request, limit: int = 10):

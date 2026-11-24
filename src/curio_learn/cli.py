@@ -1,4 +1,4 @@
-"""Command-line entry point: `curio analyze <url>`, `curio notes <analysis id>` and `curio api`."""
+"""Command-line entry point: `curio analyze`, `curio notes`, `curio ask` and `curio api`."""
 
 from __future__ import annotations
 
@@ -51,6 +51,10 @@ def main(argv: list[str] | None = None) -> int:
     nt.add_argument("--segments", default="", help="Comma-separated segment ids (with --scope selected)")
     nt.add_argument("--force", action="store_true", help="Write new notes even if saved ones exist")
     nt.add_argument("--out", type=Path, help="Write the Markdown here instead of printing it")
+
+    ak = sub.add_parser("ask", help="Ask a question about an analyzed video")
+    ak.add_argument("analysis_id")
+    ak.add_argument("question")
 
     api = sub.add_parser("api", help="Run the API server (also serves the built web UI)")
     # All interfaces, so phones and laptops on the LAN can use it. --host 127.0.0.1 keeps it local.
@@ -105,6 +109,29 @@ def main(argv: list[str] | None = None) -> int:
             print(text)
         for w in notes.warnings:
             print(f"Warning: {w}", file=sys.stderr)
+        return 0
+    if args.cmd == "ask":
+        from curio_learn.service import CurioService
+
+        try:
+            a = CurioService(settings).ask(args.analysis_id, args.question)
+        except KeyError:
+            print(f"Error: no analysis with id {args.analysis_id}", file=sys.stderr)
+            return 1
+        except CurioError as exc:
+            print(f"Error ({exc.code}): {exc.message}", file=sys.stderr)
+            return 1
+        print()
+        for p in a.parts:
+            cites = ", ".join(fmt_ts(c.start_s) for c in p.citations)
+            print(f"{p.text}" + (f"  [{cites}]" if cites else ""))
+        if not a.in_video:
+            print("\n(The video doesn't cover this.)")
+        if a.outside_knowledge:
+            print(f"\nNot from the video: {a.outside_knowledge}")
+        for w in a.warnings:
+            print(f"\nNote: {w}")
+        print(f"\n{a.llm.provider if a.llm else ''} · {a.context} transcript · {a.elapsed_s}s")
         return 0
     if args.cmd == "api":
         import uvicorn

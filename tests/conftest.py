@@ -29,6 +29,7 @@ class FakeLLM:
 
     def __init__(self, invalid_first: int = 0, kinds: dict[int, str] | None = None):
         self.calls: list[str] = []
+        self.prompts: list[str] = []
         self.invalid_first = invalid_first
         self.kinds = kinds or {}
 
@@ -38,6 +39,7 @@ class FakeLLM:
     def complete_json(self, *, model, system, user, schema, max_tokens, shared_prefix=""):
         name = schema["_model"]
         self.calls.append(name)
+        self.prompts.append(f"{shared_prefix}\n\n{user}")
         if self.invalid_first > 0:
             self.invalid_first -= 1
             return '{"not": "valid"}'
@@ -146,6 +148,28 @@ class FakeLLM:
                     "recommendations": [{"text": "Try the method yourself.", "section_ids": [ids[0]]}],
                 }
             )
+        if name == "AnswerOut":
+            import re
+
+            shown = [int(n) for n in re.findall(r"^\[(\d+) \| ", shared_prefix, re.M)]
+            if "weather" in user:
+                return json.dumps(
+                    {
+                        "parts": [{"text": "The video doesn't discuss the weather.", "passages": []}],
+                        "in_video": False,
+                        "outside_knowledge": "Weather depends on where you are.",
+                    }
+                )
+            return json.dumps(
+                {
+                    "parts": [
+                        {"text": f"Block {shown[0]} explains idea0 and word4.", "passages": [shown[0], 9999]},
+                        {"text": "It then moves on.", "passages": shown[1:2]},
+                    ],
+                    "in_video": True,
+                    "outside_knowledge": "",
+                }
+            )
         raise AssertionError(name)
 
 
@@ -180,4 +204,5 @@ def settings(tmp_path) -> Settings:
         evaluate_batch_tokens=2000,
         budget_min_minutes=2,
         budget_max_minutes=35,
+        embed_model="",
     )

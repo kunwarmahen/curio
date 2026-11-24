@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     llm_model_outline: str = ""
     llm_model_evaluate: str = ""
     llm_model_notes: str = ""
+    llm_model_ask: str = ""
     llm_max_retries: int = 2
     llm_temperature: float = 0.2
 
@@ -60,6 +61,14 @@ class Settings(BaseSettings):
     detect_ads: bool = True
     # Approximate tokens of section text per evaluation call.
     evaluate_batch_tokens: int = 12000
+
+    # --- Ask the Video ---------------------------------------------------------
+    # Transcript tokens Ask may show the model. 0 = as much as the context allows
+    # (Ollama: num_ctx minus room for the outline, conversation and answer; Claude: 150k).
+    # A longer transcript is searched instead.
+    ask_context_tokens: int = 0
+    # Embedding model (on Ollama) for searching long transcripts. Empty = keyword search only.
+    embed_model: str = "nomic-embed-text"
 
     # --- Transcripts -----------------------------------------------------------
     transcript_languages: str = "en,en-US,en-GB"
@@ -95,6 +104,7 @@ class Settings(BaseSettings):
             "outline": self.llm_model_outline,
             "evaluate": self.llm_model_evaluate,
             "notes": self.llm_model_notes,
+            "ask": self.llm_model_ask,
         }.get(task, "")
         if override:
             return override

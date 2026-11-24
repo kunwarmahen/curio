@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from curio_learn.domain import (
     AnalysisStatus,
+    Answer,
     LearningNotes,
     LearningPreferences,
     NotesScope,
@@ -18,7 +19,16 @@ from curio_learn.domain import (
     VideoAnalysis,
     VideoMetadata,
 )
-from curio_learn.storage.orm import AnalysisRow, Base, NotesRow, SegmentRow, TranscriptRow, VideoRow
+from curio_learn.storage.orm import (
+    AnalysisRow,
+    Base,
+    EmbeddingRow,
+    NotesRow,
+    QuestionRow,
+    SegmentRow,
+    TranscriptRow,
+    VideoRow,
+)
 
 # A running analysis updates its row at every pipeline step; one that hasn't for this
 # long belongs to a process that died. The slowest step (a local-LLM call) is minutes.
@@ -365,3 +375,40 @@ class Repository:
                 if row.status == AnalysisStatus.DONE.value or _aware(row.updated_at) >= cutoff:
                     return row.id
             return None
+
+    # --------------------------------------------------------------- questions
+
+    def save_answer(self, answer: Answer) -> None:
+        with self.session() as db, db.begin():
+            db.add(
+                QuestionRow(
+                    id=answer.id,
+                    analysis_id=answer.analysis_id,
+                    question=answer.question,
+                    answer_json=answer.model_dump(mode="json"),
+                    created_at=answer.created_at,
+                )
+            )
+
+    def list_answers(self, analysis_id: str) -> list[Answer]:
+        """The conversation about an analysis, oldest first."""
+        with self.session() as db:
+            rows = db.scalars(
+                select(QuestionRow).where(QuestionRow.analysis_id == analysis_id).order_by(QuestionRow.created_at)
+            )
+            return [Answer.model_validate(r.answer_json) for r in rows]
+
+    def clear_answers(self, analysis_id: str) -> int:
+        with self.session() as db, db.begin():
+            return db.execute(delete(QuestionRow).where(QuestionRow.analysis_id == analysis_id)).rowcount
+
+    # -------------------------------------------------------------- embeddings
+
+    def get_embeddings(self, video_id: str, model: str, blocks_key: str) -> list[list[float]] | None:
+        with self.session() as db:
+            row = db.get(EmbeddingRow, (video_id, model))
+            return row.vectors if row and row.blocks_key == blocks_key else None
+
+    def save_embeddings(self, video_id: str, model: str, blocks_key: str, vectors: list[list[float]]) -> None:
+        with self.session() as db, db.begin():
+            db.merge(EmbeddingRow(video_id=video_id, model=model, blocks_key=blocks_key, vectors=vectors))

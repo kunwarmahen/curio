@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ApiError, api, type Analysis, type Segment } from '../api'
+import { AskPanel } from '../components/Ask'
 import { NotesPanel } from '../components/Notes'
 import { Player, type Clip } from '../components/Player'
 import { WatchMap, WatchMapLegend, type Stretch } from '../components/WatchMap'
@@ -108,7 +109,7 @@ function Failed({ analysis }: { analysis: Analysis }) {
   )
 }
 
-type Tab = 'notes' | 'more' | 'skip' | 'scoring'
+type Tab = 'notes' | 'ask' | 'more' | 'skip' | 'scoring'
 
 function Results({ analysis }: { analysis: Analysis }) {
   const playlist = analysis.playlist!
@@ -279,6 +280,9 @@ function Results({ analysis }: { analysis: Analysis }) {
           <TabButton id="notes" tab={tab} setTab={setTab}>
             Notes
           </TabButton>
+          <TabButton id="ask" tab={tab} setTab={setTab}>
+            Ask the video
+          </TabButton>
           <TabButton id="more" tab={tab} setTab={setTab}>
             More to watch ({others.length})
           </TabButton>
@@ -291,6 +295,7 @@ function Results({ analysis }: { analysis: Analysis }) {
         </div>
         <div className="tabpanel" role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`}>
           {tab === 'notes' && <NotesPanel analysis={analysis} onSeek={seek} />}
+          {tab === 'ask' && <AskPanel analysis={analysis} onSeek={seek} />}
           {tab === 'more' && (
             <>
               <p className="muted">

@@ -167,6 +167,25 @@ export interface Notes {
   elapsed_s: number
 }
 
+export interface AnswerPart {
+  text: string
+  citations: { start_s: number }[]
+}
+
+export interface Answer {
+  id: string
+  analysis_id: string
+  question: string
+  parts: AnswerPart[]
+  in_video: boolean
+  outside_knowledge: string
+  context: 'full' | 'excerpts'
+  search: string
+  warnings: string[]
+  created_at: string
+  elapsed_s: number
+}
+
 export class ApiError extends Error {
   code: string
   constructor(code: string, message: string) {
@@ -217,5 +236,13 @@ export const api = {
     }),
   notes: (id: string) => request<Notes>(`/notes/${encodeURIComponent(id)}`),
   notesMarkdownUrl: (id: string) => `/api/v1/notes/${encodeURIComponent(id)}/markdown`,
+  conversation: (analysisId: string) => request<Answer[]>(`/analyses/${encodeURIComponent(analysisId)}/questions`),
+  ask: (analysisId: string, question: string) =>
+    request<Answer>(`/analyses/${encodeURIComponent(analysisId)}/questions`, {
+      method: 'POST',
+      body: JSON.stringify({ question }),
+    }),
+  clearConversation: (analysisId: string) =>
+    request<{ deleted: number }>(`/analyses/${encodeURIComponent(analysisId)}/questions`, { method: 'DELETE' }),
   recent: () => request<RecentVideo[]>('/videos/recent?limit=12'),
 }

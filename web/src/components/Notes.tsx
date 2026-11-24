@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { ApiError, api, type Analysis, type Notes, type NotesScope } from '../api'
 import { clock, duration } from '../format'
+import { TimeLink } from './TimeLink'
 
 const SCOPES: { id: NotesScope; label: string }[] = [
   { id: 'playlist', label: 'Your playlist' },
@@ -161,14 +162,6 @@ export function NotesPanel({ analysis, onSeek }: { analysis: Analysis; onSeek: (
         <NotesSheet notes={shown} onSeek={onSeek} onRewrite={() => write(true)} busy={busy} />
       )}
     </div>
-  )
-}
-
-function TimeLink({ t, onSeek }: { t: number; onSeek: (t: number) => void }) {
-  return (
-    <button type="button" className="timelink" onClick={() => onSeek(t)} aria-label={`Watch from ${clock(t)}`}>
-      {clock(t)}
-    </button>
   )
 }
 

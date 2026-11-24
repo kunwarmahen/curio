@@ -330,3 +330,35 @@ class LearningNotes(BaseModel):
     @property
     def watch_s(self) -> float:
         return round(sum(s.end_s - s.start_s for s in self.sections), 2)
+
+
+# ---------------------------------------------------------------- ask the video
+
+
+class Citation(BaseModel):
+    """Where the video says it: the start of the best-matching sentence (a real cue time)."""
+
+    start_s: float
+
+
+class AnswerPart(BaseModel):
+    text: str
+    citations: list[Citation] = Field(default_factory=list)
+
+
+class Answer(BaseModel):
+    id: str
+    analysis_id: str
+    question: str
+    parts: list[AnswerPart] = Field(default_factory=list)
+    # False when the video doesn't address the question.
+    in_video: bool = True
+    # General knowledge that is NOT from the video, kept apart and labeled as such.
+    outside_knowledge: str = ""
+    # "full": the model saw the whole transcript; "excerpts": the passages search found.
+    context: str = "full"
+    search: str = ""
+    warnings: list[str] = Field(default_factory=list)
+    llm: LLMInfo | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    elapsed_s: float = 0.0

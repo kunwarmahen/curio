@@ -88,3 +88,28 @@ class NotesRow(Base):
     notes_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
+class QuestionRow(Base):
+    """One question and its answer, in the conversation about an analysis."""
+
+    __tablename__ = "questions"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    analysis_id: Mapped[str] = mapped_column(ForeignKey("analyses.id", ondelete="CASCADE"), index=True)
+    question: Mapped[str] = mapped_column(Text)
+    answer_json: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class EmbeddingRow(Base):
+    """Embedding vectors of a video's transcript blocks, for one embedding model."""
+
+    __tablename__ = "embeddings"
+
+    video_id: Mapped[str] = mapped_column(ForeignKey("videos.video_id"), primary_key=True)
+    model: Mapped[str] = mapped_column(String(100), primary_key=True)
+    # Hash of the block texts, so a changed transcript or blocking invalidates the vectors.
+    blocks_key: Mapped[str] = mapped_column(String(64))
+    vectors: Mapped[list] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)

@@ -223,3 +223,48 @@ shown."""
 
 def notes_summary_user(*, title: str, brief: str, notes: str) -> str:
     return f"Video: {title}\n\n{brief}\n\nStudy notes (id [time] title, then points):\n{notes}"
+
+
+ASK_SYSTEM = """You are Curio, an expert teacher answering a learner's questions about a \
+video. You have the video's outline and its transcript as numbered passages; each line \
+looks like `[n | m:ss] text`.
+
+Answer from the transcript:
+- Write the answer as 1-5 short parts (a sentence or a short paragraph each). For each \
+part give `passages`: the numbers of the passages it is based on. Every claim about what \
+the video says must cite at least one passage.
+- "Where does the speaker explain X?" questions: say where and what is said there, \
+citing the passages.
+- Use the speaker's own terms. Quote only short phrases.
+- If the transcript doesn't address the question, set in_video to false and say in one \
+part (with no passages) that the video doesn't cover it; mention the closest thing it \
+does cover, with its passages, if there is one.
+- outside_knowledge: only if it genuinely helps (a definition the video assumes, a \
+correction, or the answer the video lacks), 1-3 sentences of general knowledge. This is \
+shown separately, labeled as not from the video. Never mix it into the parts and never \
+attribute it to the speaker. Otherwise "".
+- If you only see excerpts of the transcript and the answer may be elsewhere, say what \
+the excerpts show instead of guessing.
+- Use only passage numbers that appear in the transcript below."""
+
+
+def ask_shared_prefix(*, title: str, brief: str, outline: str, transcript: str, full: bool) -> str:
+    which = (
+        "Full transcript"
+        if full
+        else "Transcript excerpts found by search (… marks skipped parts; passages keep their numbers)"
+    )
+    return (
+        f"Video: {title}\n\n{brief}\n\nOutline (id [start–end] kind: title — summary):\n{outline}\n\n"
+        f"{which}:\n<transcript>\n{transcript}\n</transcript>"
+    )
+
+
+def ask_user(*, question: str, history: str, hints: str) -> str:
+    parts = []
+    if history:
+        parts.append(f"Conversation so far:\n{history}")
+    if hints:
+        parts.append(hints)
+    parts.append(f"Question: {question}")
+    return "\n\n".join(parts)

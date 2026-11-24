@@ -78,6 +78,7 @@ curio/
 │   │   ├── boundaries.py     sentence-level section starts (step 6b)
 │   │   ├── ads.py            cut sponsor reads out of content sections (step 6c)
 │   │   ├── notes.py          learning notes, takeaways, definitions, Markdown export
+│   │   ├── ask.py            Ask the Video: context selection, grounded answers
 │   │   └── pipeline.py       orchestrates the steps, reports progress
 │   ├── storage/
 │   │   ├── orm.py            SQLAlchemy tables
@@ -135,6 +136,9 @@ LearningNotes   id, analysis_id, scope (playlist|video|selected), segment_ids[],
 SectionNotes    section_id, title, start_s, end_s, points[NotePoint(text, start_s)],
                 explanation, definitions[Definition(term, definition, start_s)]
 Takeaway        text, section_ids[], start_s (start of its earliest section)
+Answer          id, analysis_id, question, parts[AnswerPart(text, citations[start_s])],
+                in_video, outside_knowledge (not from the video), context
+                (full|excerpts), search (keyword|keyword+semantic), warnings[]
 ```
 
 All timestamps derive from caption cues. The LLM refers to **block numbers** (outline)
@@ -155,6 +159,9 @@ invent a timestamp: code converts the numbers to the original cue times.
 | `POST` | `/analyses/{id}/notes` | `{scope, segment_ids?, force?}` → `202 {notes_id, status}`; runs in background on the same single worker as analyses. Reuses saved notes with the same scope and model unless `force`. |
 | `GET`  | `/analyses/{id}/notes` | `[LearningNotes]`, newest first |
 | `GET`  | `/notes/{id}` | `LearningNotes` (poll while `pending`/`running`) |
+| `POST` | `/analyses/{id}/questions` | `{question}` → `Answer` (synchronous, seconds) |
+| `GET`  | `/analyses/{id}/questions` | the conversation, oldest first |
+| `DELETE` | `/analyses/{id}/questions` | clear the conversation → `{deleted}` |
 | `GET`  | `/notes/{id}/markdown` | the notes as a Markdown download, with timestamp links into the video |
 
 Errors use `{"detail": {"code": "...", "message": "..."}}` with codes
@@ -278,7 +285,34 @@ in their own table (`notes`) and keyed by analysis, scope, picked segments and
 model (`NOTES_VERSION`), so the same request returns the saved notes. Markdown
 export renders every timestamp as a link to the video at that second.
 
-## 10. Phase 1 MVP milestone
+## 10. Ask the Video (`analysis/ask.py`, `processing/retrieval.py`)
+
+**Context.** The prompt holds the learner brief, the outline, and transcript blocks
+as `[n | m:ss] text`. If all blocks fit the budget (`CURIO_ASK_CONTEXT_TOKENS`, or
+automatically: Ollama's `num_ctx` minus room for instructions, outline,
+conversation and a 2,000-token answer; 150k with Claude), the model sees the whole
+transcript. This part of the prompt is identical for every question about a video,
+so Claude's prompt cache and Ollama's KV cache reuse it: measured 38 s for the first
+question on the 80-minute lecture, 5–9 s for the next ones.
+
+**Search** (only when the transcript doesn't fit). Blocks are ranked by BM25 and by
+cosine similarity of `nomic-embed-text` embeddings (with its `search_query:` /
+`search_document:` prefixes), fused by reciprocal rank. Block vectors are computed
+once per video and stored in `embeddings`, keyed by a hash of the blocks; if Ollama
+can't embed, search falls back to BM25 alone. Times named in the question ("at 23
+minutes", "1:05:00", "minute 7") pull in 1.5 min before to 2.5 min after that point
+first; then each hit is added with its neighbouring blocks until the budget is
+used. The search query includes the previous question, for follow-ups. Excerpts are
+shown in video order with `…` for gaps, and the answer says it was searched.
+
+**Answer.** `AnswerOut` = parts (text + passage numbers), `in_video`,
+`outside_knowledge`. Code drops citations of passages that weren't shown (reported
+in `warnings`) and maps each remaining one to the start of the sentence in that
+block sharing the most words with the part, so a timestamp points at the claim, not
+just its 20–45 s block. The last four turns are included as conversation history.
+Answers are stored in `questions`.
+
+## 11. Phase 1 MVP milestone
 
 **Done when:** pasting the test lecture (`e_m99aR7_3Q`, 80 min) produces a
 validated playlist of about 15–30 minutes in which every segment has an accurate

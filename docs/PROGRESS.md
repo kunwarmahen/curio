@@ -10,7 +10,7 @@
 | Deployment | ✅ Podman image + `curio.sh` |
 | Phase 2: Intelligent learning | ✅ learning profiles, custom objective, redundancy detection, skip recommendations, sentence-level boundaries, mid-roll ad removal and learning notes |
 | LAN access | ✅ app and Podman container listen on all interfaces by default |
-| Phase 3: Interactive learning | ⏳ only segment completion tracking so far |
+| Phase 3: Interactive learning | 🟡 Ask the Video (grounded answers, timestamps, hybrid search) and segment completion tracking; quizzes, flashcards and saved playlists are not built |
 | Phase 4: Multi-video intelligence | ⏳ not started |
 
 ## Phase 1 log (2026-11-23)
@@ -32,7 +32,7 @@
 - `storage`: SQLAlchemy/SQLite (videos, transcripts, analyses, segments),
   cache keyed by video + preferences + model + pipeline version.
 - `service`, FastAPI (`/api/v1`), CLI. (A Streamlit UI was built first and then replaced; see the UI log below.)
-- 98 offline tests at the end of Phase 1 (105 with notes) (ad detection and carving, sentence units and boundary refinement, URL parsing, normalization, segmentation repair, scoring and
+- 98 offline tests at the end of Phase 1 (105 with notes, 115 with Ask the Video) (ad detection and carving, sentence units and boundary refinement, URL parsing, normalization, segmentation repair, scoring and
   calibration, playlist and prerequisites, validation, LLM retry, request shapes and
   truncation guard, service caching, stale runs, API).
 
@@ -275,10 +275,49 @@ health and port checks use 127.0.0.1. Verified: the API answered on
 need `sudo ufw allow from 192.168.1.0/24 to any port 8470 proto tcp` (not run: it
 needs sudo). There is no login, which README documents.
 
+### Ask the Video (2026-11-23)
+
+Built `analysis/ask.py`, `processing/retrieval.py` (BM25, embedding search, fusion,
+time references), `questions` and `embeddings` tables, three API routes, `curio ask`
+and the "Ask the video" tab. Design in ARCHITECTURE.md §10. 10 new tests (115 in
+total).
+
+Verified with Ollama on the CS329Z lecture, full-transcript mode:
+
+| Question | Time | Result |
+|---|---|---|
+| Explain the method discussed at 23 minutes | 38.0 s | OPRO, its loop, "take a deep breath"; cites 22:13–24:28 |
+| Where does the speaker explain GRPO? | 8.2 s | 59:26 intro through the update rule to DeepSeek-R1 at 1:07:36 |
+| Compare GEPA and MIPROv2 | 8.8 s | TPE search (33:16) vs Pareto pool and mutation/merge (41:33–43:33) |
+| A practical example of when to fine-tune | 5.6 s | distillation, context length, small models (1:20:01–1:20:10) |
+| How do I deploy an agent on Kubernetes? | 5.5 s | "doesn't cover this", closest section cited, general advice in the separate field |
+
+- The first question pays for reading the transcript (about 21k tokens); later ones
+  reuse Ollama's cached prefix.
+- Nine cited times were checked against the transcript; each lands on the sentence
+  that says it (for example 22:13 "a 2024 paper called Large Language Models as
+  Optimizers, or they call their method OPRO", 1:20:07 "You have a capable teacher,
+  but you want a cheaper model, then you could use distillation"). The one number
+  not in the earlier checks, chain-of-thought's 71.8%, is in the transcript.
+- Search mode, forced with `CURIO_ASK_CONTEXT_TOKENS=5000` (about a quarter of the
+  lecture): the GRPO, "take a deep breath" and "at 1:12:00" questions got the same
+  answers from 46–47 of 206 passages, in 11–13 s. Embeddings for the 206 blocks were
+  computed once and stored (2 MB).
+- Browser check (desktop and 390 px, over the LAN address): asking from the form,
+  the pending state, timestamps that play the cited moment, the "Not from the video"
+  box and the search notice.
+- The test questions are saved in the lecture's conversation in `data/curio.db`;
+  "Clear the conversation" removes them.
+
 ### Known gaps / next steps
 - The Anthropic provider is covered by unit tests with a mocked client only.
   No API key was available, so it has not been run against the live API yet.
 - Calibrate the scoring thresholds and the redundancy threshold on more videos
   (lectures, podcasts, tutorials with auto-captions).
-- Phase 3: Ask the Video (retrieval over
-  blocks with `nomic-embed-text`), quizzes and flashcards, saved custom playlists.
+- **Overnight queue** (requested): add videos at any time and have Curio process
+  the queue at night, when nobody is using the GPU. Planned shape: a `queued`
+  status and a queue table, a schedule window (for example `CURIO_QUEUE_HOURS=1-7`)
+  plus an idle check (GPU utilization and Ollama's running models below a
+  threshold), a "Queue for tonight" button beside Analyze, and the queue shown on
+  the home page. Analyses would run one at a time, as now.
+- Phase 3, still to build: quizzes and flashcards, saved custom playlists.

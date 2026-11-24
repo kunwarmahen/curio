@@ -1057,3 +1057,106 @@ button.stretch:hover,
     grid-template-columns: auto 3.75rem 1fr;
   }
 }
+
+/* -------------------------------------------------------------------- ask */
+
+.ask {
+  max-width: 820px;
+}
+.ask__suggestions {
+  list-style: none;
+  padding: 0;
+  margin: 1rem 0 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.ask__suggestions .chip {
+  text-align: left;
+}
+.ask__thread {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.qa {
+  padding: 1.25rem 0;
+  border-bottom: 1px solid var(--rule);
+}
+.qa:first-child {
+  padding-top: 0;
+}
+.qa__question {
+  font-weight: 700;
+  font-size: var(--t-lead);
+  margin: 0 0 0.6rem;
+}
+.qa__answer p {
+  margin: 0 0 0.6rem;
+  max-width: 44rem;
+}
+.qa__notcovered {
+  font-weight: 700;
+}
+/* Outside knowledge: a margin note in a different hand, never mistaken for the video. */
+.qa__outside {
+  margin: 0.9rem 0 0.3rem;
+  padding: 0.6rem 0.9rem;
+  border: 1px dashed var(--rule-strong);
+  border-radius: var(--radius);
+  color: var(--ink-muted);
+  max-width: 44rem;
+}
+.qa__outside strong {
+  color: var(--ink);
+}
+.qa__warnings {
+  margin: 0.5rem 0 0;
+  padding-left: 1.1rem;
+  font-size: var(--t-small);
+  color: var(--ink-muted);
+}
+.qa--pending .qa__question {
+  color: var(--ink-muted);
+}
+.ask__form {
+  margin-top: 1.5rem;
+}
+.ask__row {
+  display: flex;
+  gap: 0.6rem;
+  align-items: flex-end;
+  margin-top: 0.4rem;
+}
+.ask__row textarea {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  color: inherit;
+  padding: 0.65rem 0.8rem;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  resize: vertical;
+}
+.ask__row textarea:focus-visible {
+  outline: 3px solid var(--ink);
+  outline-offset: 1px;
+}
+.ask__clear {
+  margin-top: 0.75rem;
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  font-size: var(--t-small);
+  color: var(--ink-muted);
+  text-decoration: underline;
+  cursor: pointer;
+}
+@media (max-width: 560px) {
+  .ask__row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}

@@ -17,7 +17,9 @@ topic segmentation → contextual evaluation → explainable scoring → time-bu
 playlist → validation → web app (React) with a watch map and an embedded player. Phase 2 is
 complete: learning profiles, custom objectives, redundancy detection, skip
 recommendations and **learning notes** (key points, explanations, definitions,
-takeaways and recommendations, each linked to the moment it's said). See
+takeaways and recommendations, each linked to the moment it's said). From Phase 3,
+**Ask the Video** is in: questions answered from the transcript with clickable
+timestamps, keeping anything that isn't from the video apart. See
 [docs/PROGRESS.md](docs/PROGRESS.md) for details and
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design.
 
@@ -47,6 +49,7 @@ uv run curio api        # app → http://127.0.0.1:8470 and http://<this machine
 uv run curio analyze "https://www.youtube.com/watch?v=e_m99aR7_3Q" \
     --profile technical --objective "how GEPA optimizes prompts" --minutes 20
 uv run curio notes <analysis id> --scope playlist --out notes.md   # learning notes
+uv run curio ask <analysis id> "Where does the speaker explain GRPO?"
 ```
 
 `curio api` listens on all interfaces, so phones and other computers on your
@@ -69,6 +72,14 @@ item has a timestamp; select it to play the video from that moment. Notes are
 saved, and can be downloaded as Markdown. With the local model, notes take about a
 minute per 20 minutes of video (68 s for a 26-minute playlist, 1 min 51 s for a
 72-minute video).
+
+The **Ask the video** tab answers questions about the video ("Explain the method
+at 23 minutes", "Compare GEPA and MIPROv2", "Where is X explained?"). Each part of an
+answer has the timestamps it's based on; general knowledge the video doesn't contain
+is shown in a separate box labeled "Not from the video", and questions the video
+doesn't cover say so. The conversation is saved, and follow-ups know what was
+asked before. With the local model, the first question about a video takes about
+40 s (the model reads the whole transcript) and follow-ups 5–10 s.
 
 `curio analyze` prints the playlist and, with `--json out.json`, writes the full
 analysis. Results are cached in `data/curio.db`. Pass `--force` to re-analyze.
@@ -135,7 +146,9 @@ most important ones:
 | Variable | Default | Meaning |
 |---|---|---|
 | `CURIO_LLM_PROVIDER` | `auto` | `auto` uses Anthropic if `ANTHROPIC_API_KEY` is set, otherwise Ollama |
-| `CURIO_LLM_MODEL` | provider default | model for all tasks; `CURIO_LLM_MODEL_OUTLINE` / `_EVALUATE` / `_NOTES` override per task |
+| `CURIO_LLM_MODEL` | provider default | model for all tasks; `CURIO_LLM_MODEL_OUTLINE` / `_EVALUATE` / `_NOTES` / `_ASK` override per task |
+| `CURIO_ASK_CONTEXT_TOKENS` | `0` (auto) | transcript tokens Ask may show the model; longer transcripts are searched |
+| `CURIO_EMBED_MODEL` | `nomic-embed-text` | Ollama embedding model for searching long transcripts; empty = keyword search only |
 | `CURIO_OLLAMA_DEFAULT_MODEL` | `qwen3.8-64k` | local model |
 | `CURIO_OLLAMA_NUM_CTX` | `32768` | context size for every Ollama call (fixed, so the model loads once) |
 | `CURIO_ANTHROPIC_DEFAULT_MODEL` | `claude-opus-5-5` | cloud model |
@@ -180,6 +193,11 @@ most important ones:
     and code turns that into the sentence's cue time. A second, short call writes
     the summary, takeaways and recommendations, each tied to section ids that are
     checked against the notes.
+11. **Ask (LLM, on request):** the outline plus the whole transcript when it fits
+    the context (about 95 minutes of speech with Ollama's 32k, always with Claude);
+    otherwise the passages found by keyword (BM25) and embedding search, plus the
+    stretch the question names by time. Answer parts cite passage numbers, which code
+    turns into the start of the best-matching sentence in each passage.
 
 ## Tests
 

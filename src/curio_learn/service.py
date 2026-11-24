@@ -6,11 +6,13 @@ import logging
 import uuid
 from collections.abc import Callable
 
+from curio_learn.analysis.ask import answer_question
 from curio_learn.analysis.notes import generate_notes, scope_key, scope_sections, to_markdown
 from curio_learn.analysis.pipeline import AnalysisPipeline
 from curio_learn.config import Settings, get_settings
 from curio_learn.domain import (
     AnalysisStatus,
+    Answer,
     Block,
     LearningNotes,
     LearningPreferences,
@@ -24,7 +26,8 @@ from curio_learn.ingestion.transcripts import TranscriptProvider, YouTubeCaption
 from curio_learn.ingestion.url import extract_video_id
 from curio_learn.llm.base import LLMProvider
 from curio_learn.llm.factory import build_provider
-from curio_learn.processing.normalize import boundary_units, build_blocks
+from curio_learn.processing.normalize import approx_tokens, boundary_units, build_blocks
+from curio_learn.processing.retrieval import Embedder, OllamaEmbedder, blocks_key, rank
 from curio_learn.storage.repository import RecentVideo, Repository
 
 log = logging.getLogger(__name__)
@@ -46,12 +49,14 @@ class CurioService:
         llm: LLMProvider | None = None,
         metadata: MetadataProvider | None = None,
         transcripts: TranscriptProvider | None = None,
+        embedder: Embedder | None = None,
     ):
         self.settings = settings or get_settings()
         self.repo = repository or Repository(self.settings.database_url)
         self._llm = llm
         self.metadata = metadata or YtDlpMetadataProvider()
         self._transcripts = transcripts
+        self._embedder = embedder
 
     @property
     def llm(self) -> LLMProvider:
@@ -279,3 +284,88 @@ class CurioService:
             return None
         analysis = self.repo.get_analysis(notes.analysis_id)
         return to_markdown(notes, analysis) if analysis else None
+
+    # --------------------------------------------------------- ask the video
+
+    @property
+    def embedder(self) -> Embedder | None:
+        if self._embedder is None and self.settings.embed_model:
+            self._embedder = OllamaEmbedder(self.settings.ollama_host, self.settings.embed_model)
+        return self._embedder
+
+    def _ask_budget(self, analysis: VideoAnalysis, history: list[Answer]) -> int:
+        s = self.settings
+        if s.ask_context_tokens:
+            return s.ask_context_tokens
+        if self.llm.name == "anthropic":
+            return 150000
+        # Room for instructions (~700), the outline, the conversation, the question and the answer.
+        outline = sum(approx_tokens(f"{x.section.title} {x.section.summary}") + 12 for x in analysis.sections)
+        convo = sum(approx_tokens(a.question + " ".join(p.text for p in a.parts)) + 20 for a in history[-4:])
+        return max(2000, s.ollama_num_ctx - 2000 - 700 - outline - convo - 600)
+
+    def _ranker(self, video_id: str, blocks: list[Block]) -> tuple[Callable[[str], list[int]], list[str]]:
+        """A search function over blocks, and what it uses ("keyword", "semantic")."""
+        emb = self.embedder
+        vectors = None
+        if emb is not None:
+            key = blocks_key(blocks)
+            try:
+                vectors = self.repo.get_embeddings(video_id, emb.name, key)
+                if vectors is None:
+                    vectors = emb.embed([b.text for b in blocks], kind="document")
+                    self.repo.save_embeddings(video_id, emb.name, key, vectors)
+            except Exception as exc:  # embeddings are an optional improvement
+                log.warning("Embedding search unavailable (%s); using keyword search", exc)
+                vectors = None
+        kinds = ["keyword"] + (["semantic"] if vectors else [])
+
+        def ranked(query: str) -> list[int]:
+            qv = None
+            if vectors:
+                try:
+                    qv = emb.embed([query], kind="query")[0]
+                except Exception as exc:
+                    log.warning("Query embedding failed (%s); using keyword search", exc)
+            return rank(query, blocks, query_vector=qv, block_vectors=vectors)
+
+        return ranked, kinds
+
+    def ask(self, analysis_id: str, question: str) -> Answer:
+        """Answer a question about an analyzed video and save it to the conversation."""
+        if not question.strip():
+            raise AnalysisError("Ask a question about the video.")
+        analysis = self.repo.get_analysis(analysis_id)
+        if analysis is None:
+            raise KeyError(analysis_id)
+        if analysis.status != AnalysisStatus.DONE:
+            raise AnalysisError("Questions can be asked once the analysis has finished.")
+        transcript = self.repo.get_transcript(analysis.video.video_id)
+        if transcript is None:
+            raise AnalysisError("The transcript of this video is no longer stored.")
+        blocks = build_blocks(transcript.cues)
+        history = self.repo.list_answers(analysis_id)
+        budget = self._ask_budget(analysis, history)
+        searched = sum(approx_tokens(b.text) + 8 for b in blocks) > budget
+        ranked, kinds = self._ranker(analysis.video.video_id, blocks) if searched else (lambda _: [], [])
+        answer = answer_question(
+            self.llm,
+            model=self.settings.model_for("ask"),
+            analysis=analysis,
+            blocks=blocks,
+            units=boundary_units(transcript.cues),
+            question=question,
+            history=history,
+            budget_tokens=budget,
+            ranked=ranked,
+            search="+".join(kinds),
+            retries=self.settings.llm_max_retries,
+        )
+        self.repo.save_answer(answer)
+        return answer
+
+    def conversation(self, analysis_id: str) -> list[Answer]:
+        return self.repo.list_answers(analysis_id)
+
+    def clear_conversation(self, analysis_id: str) -> int:
+        return self.repo.clear_answers(analysis_id)
