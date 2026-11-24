@@ -642,8 +642,8 @@ function Scoring({ analysis }: { analysis: Analysis }) {
                   <td>
                     {s.score.adjustments.map((a) => (
                       <div key={a.rule}>
-                        {a.delta > 0 ? '+' : '−'}
-                        {Math.abs(a.delta).toFixed(0)} {a.reason}
+                        {a.delta !== 0 && `${a.delta > 0 ? '+' : '−'}${Math.abs(a.delta).toFixed(0)} `}
+                        {a.reason}
                       </div>
                     ))}
                   </td>

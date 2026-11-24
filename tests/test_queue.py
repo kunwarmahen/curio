@@ -416,3 +416,38 @@ def test_a_pause_while_mapping_topics_keeps_the_finished_windows(settings):
     resumed = pause_after(windows)
     assert svc.llm.calls.count("OutlineOut") == 0 and svc.llm.calls.count("OverviewOut") == 1
     assert [s.model_dump() for s in resumed.sections] == [s.model_dump() for s in fresh.sections]
+
+
+def test_relabeling_saved_analyses_changes_only_labels(service):
+    from curio_learn.analysis.playlist import BEYOND_BUDGET
+    from curio_learn.domain import Importance
+
+    a = service.analyze(URL, LearningPreferences())
+    chosen = {sid for seg in a.playlist.segments for sid in seg.section_ids}
+    outside = next(s for s in a.sections if s.section.id not in chosen and s.importance is not Importance.SKIP)
+    # Saved before the rule: an essential section outside the playlist.
+    old = a.model_copy(
+        update={
+            "sections": [
+                s.model_copy(update={"importance": Importance.ESSENTIAL}) if s is outside else s for s in a.sections
+            ],
+            "segments": [
+                g.model_copy(update={"importance": Importance.ESSENTIAL}) if outside.section.id in g.section_ids else g
+                for g in a.segments
+            ],
+        }
+    )
+    service.repo.save_result(old)
+    service.set_custom_playlist(a.id, [g.id for g in a.segments][:2])
+
+    assert service.relabel_saved() == {a.id: 1}
+    new = service.get(a.id)
+    fixed = next(s for s in new.sections if s.section.id == outside.section.id)
+    assert fixed.importance is Importance.RECOMMENDED
+    assert fixed.score.adjustments[-1].rule == BEYOND_BUDGET and fixed.score.final == outside.score.final
+    seg = next(g for g in new.segments if outside.section.id in g.section_ids)
+    assert seg.importance is Importance.RECOMMENDED
+    assert new.playlist.model_dump() == a.playlist.model_dump()
+    assert [g.id for g in new.segments] == [g.id for g in a.segments]
+    assert service.custom_playlist(a.id) == [g.id for g in a.segments][:2]
+    assert service.relabel_saved() == {}  # nothing left to change

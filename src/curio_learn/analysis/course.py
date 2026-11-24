@@ -27,7 +27,7 @@ from typing import Literal
 from pydantic import BaseModel
 
 from curio_learn.analysis import prompts
-from curio_learn.analysis.playlist import PlaylistConfig, _segment, select_sections
+from curio_learn.analysis.playlist import BEYOND_BUDGET, PlaylistConfig, _segment, select_sections
 from curio_learn.analysis.profiles import learner_brief
 from curio_learn.analysis.redundancy import similarity_matrix
 from curio_learn.domain import (
@@ -313,6 +313,8 @@ def _for_course(item: Item, *, penalty: float = 0.0) -> ScoredSection:
     prefix = f"L{item.lecture.position}."
     score = s.score.model_copy(update={"final": max(0.0, s.score.final - penalty)})
     importance = s.importance
+    if any(a.rule == BEYOND_BUDGET for a in s.score.adjustments):
+        importance = Importance.ESSENTIAL  # relabeled only for the video's own time budget
     if penalty and importance == Importance.ESSENTIAL:
         importance = Importance.RECOMMENDED
     return s.model_copy(

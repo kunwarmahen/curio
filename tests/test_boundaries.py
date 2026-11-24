@@ -148,3 +148,33 @@ def test_candidates_never_cross_into_other_sections():
     times = [ln.split("[")[1].split("]")[0] for ln in part.splitlines() if ln.strip()[:1].isdigit()]
     first = times[0].split(":")
     assert int(first[0]) * 60 + int(first[1]) >= blocks[sections[1].start_block + 1].start_s - 1
+
+
+class BatchProvider(ChooseProvider):
+    """Records each boundary call and answers sentence 1 for every boundary in it."""
+
+    def __init__(self):
+        super().__init__()
+        self.calls: list[list[str]] = []
+
+    def complete_json(self, *, model, system, user, schema, max_tokens, shared_prefix=""):
+        import re
+
+        ids = re.findall(r"### Boundary (\S+)", user)
+        self.calls.append(ids)
+        return json.dumps({"boundaries": [{"boundary_id": b, "first_sentence": 1} for b in ids]})
+
+
+def test_many_boundaries_are_sent_in_batches_that_fit_the_context():
+    cues = lecture_cues()
+    blocks, units = build_blocks(cues), build_utterances(cues)
+    sections = outline(blocks, [0, 3, 6, 9])
+    assert len(sections) == 4
+    provider = BatchProvider()
+    _, _, warnings = refine_boundaries(
+        provider, model="m", sections=sections, blocks=blocks, units=units, min_section_s=0, batch_tokens=50
+    )
+    assert len(provider.calls) > 1 and not warnings
+    sent = [b for call in provider.calls for b in call]
+    assert sorted(sent) == sorted(set(sent))  # each boundary once
+    assert len(sent) == len(sections) - 1

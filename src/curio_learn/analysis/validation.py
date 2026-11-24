@@ -41,9 +41,12 @@ def validate(
                 # Silence or music between sections is fine; dropped speech is not.
                 warn(f"{b.start_s - a.end_s:.0f}s of transcript between {a.id} and {b.id} is in no section.")
 
-    # Every segment boundary must be a real caption time (a block or sentence edge).
+    # Every segment boundary must be a real caption time. Either edge of a cue counts:
+    # next to a sponsor read that was cut out, content ends where the ad's first cue
+    # starts and resumes where its last cue ends.
     starts = {round(t, 2) for t in cue_starts} if cue_starts else {round(b.start_s, 2) for b in blocks}
     ends = {round(t, 2) for t in cue_ends} if cue_ends else {round(b.end_s, 2) for b in blocks}
+    starts = ends = starts | ends
     by_id = {s.id: s for s in sections}
     for seg in playlist.segments + others:
         if not (0 <= seg.start_s < seg.end_s <= duration_s + 5):

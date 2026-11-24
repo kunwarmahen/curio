@@ -507,10 +507,67 @@ video page, review, the queue, courses, LAN use, CLI, settings, things to know)
 instead of tracking what was built; build history and measurements stay here and the
 design in ARCHITECTURE. Podman internals moved from the README to ARCHITECTURE §8.
 
+### Threshold calibration on 19 videos (2026-11-24)
+Re-scored every saved analysis offline with the current code (the tool reproduced all
+saved tiers exactly), plus 5 new analyses chosen for what was missing, on a copy of
+the database:
+
+| Video | Kind | Goal | Sections | Playlist |
+|---|---|---|---|---|
+| `aircAruvnKk` 3Blue1Brown, neural networks (19 min) | short, dense explainer | beginner | 10 | 10 of 19 min |
+| `nm1TxQj9IsQ` Huberman Lab, sleep (82 min) | solo podcast, sponsor reads | executive + "just the practical protocols" | 53 | 17 of 82 min |
+| `vg01Q1BI4WM` Yale, This Is Your Brain (53 min) | non-technical lecture | general | 19 | 17 of 53 min |
+| `zjkBMFhNj_g` Karpathy, Intro to LLMs (60 min) | talk, auto-captions | deep dive | 20 | 29 of 60 min |
+| `ZA-tUyM_y7s` MIT 6.006 lecture 1 (46 min) | CS lecture | beginner | 12 | 14 of 46 min |
+
+With the 11 CS329Z lectures and the earlier podcast, Kubernetes and PostgreSQL runs:
+19 analyses, 6 kinds of video, all 5 goals. 86–303 s each.
+
+**Findings, judged by reading the sections against each goal:**
+1. **"Essential" didn't match the playlist.** 58 of 145 essential sections (40%) were
+   not in their playlist: essentials added up to 1.1–2.6× the budget in every video.
+   Raising the threshold doesn't fix it (at 82, 21% still out, up to 2× the budget),
+   because the budget changes per video and with the watch time chosen. Fixed with
+   `fit_labels`: an essential section that doesn't fit is labeled recommended, with
+   "didn't fit in your N-minute playlist" in the scoring table. Now 90 essential
+   sections, all in their playlists; essential minutes ≈ the budget.
+2. **The thresholds themselves hold.** Skip below 40, and the content floor at 50,
+   matched my reading: skipped content is Q&A digressions, early history, and basics
+   the learner knows. Borderline cases (AI rating 48–54; the model's "middling" 49.5
+   is common) are judgment calls either way. Raising the essential threshold would
+   not have improved agreement: the sections I'd call essential don't score higher
+   than the ones I wouldn't (Lecture 1 for an experienced learner: the debugging
+   framework 98, reliability 71; textbook ReAct vs. CoT 99). Thresholds stay
+   70 / 55 / 40, floor 50.
+3. **Boundary refinement failed on the Huberman podcast**: 53 sections needed a 36k-token
+   prompt in one call (Ollama context 32k), so every section kept block-level starts.
+   Boundaries now go in batches that fit.
+4. **A false validation warning** ("X04 boundaries don't match caption times", 3Blue1Brown)
+   next to a cut-out sponsor read: content ends where the ad's first cue starts. Both
+   cue edges now count as caption times.
+
+**Not threshold problems, left as they are:**
+- Ranking: for an expert's own goal the model sometimes rates textbook material above
+  "what to watch out for"; Karpathy's "LLM as an operating system" was rated 35 (skip).
+- Within-video rank (half of each score) pulls solid sections down a tier in videos
+  where everything is strong (Kubernetes for beginners: "What is Kubernetes" 82 → 65,
+  recommended).
+- Greedy selection by score lets one long section crowd out several: MIT lecture 1's
+  10-minute induction proof (100) left out efficiency and complexity classes (87, 93)
+  from a 14-minute beginner playlist.
+- Saved analyses were relabeled with the new `curio relabel` (labels only, no model
+  calls; playlists, part ids, custom playlists and watched parts unchanged). The live
+  database (backed up first to `data/curio-live-backup-2026-11-24.db`): 48 sections in
+  11 analyses, now 77 essential sections, all in their playlists; the CS329Z course
+  playlist unchanged. The pipeline version isn't bumped, so nothing is re-analyzed.
+- 4 new tests (170 in total).
+
 ### Known gaps / next steps
 - The Anthropic provider has not been run against the live API (no credentials
   here); `curio check-claude` checks it with one tiny request.
-- Calibrate the scoring thresholds and the redundancy threshold on more videos
-  (lectures, podcasts, tutorials with auto-captions).
+- Ranking misses that thresholds can't fix (see the 2026-11-24 calibration): the
+  model's ratings for a learner's own goal, within-video rank in all-strong videos,
+  and long sections crowding out several shorter ones.
+- The lexical redundancy threshold (0.45) wasn't examined in this calibration.
 - Repeat vs overlap verdicts vary run to run.
 - The made-up-names check covers names, not plain-word claims or numbers.

@@ -92,6 +92,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Make one tiny request to Claude to check the API key, model and structured output (costs < $0.01)",
     )
 
+    sub.add_parser(
+        "relabel",
+        help="Relabel saved analyses with the current rule (essential = in the playlist); no model calls",
+    )
+
     api = sub.add_parser("api", help="Run the API server (also serves the built web UI)")
     # All interfaces, so phones and laptops on the LAN can use it. --host 127.0.0.1 keeps it local.
     api.add_argument("--host", default="0.0.0.0")
@@ -145,6 +150,14 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.cmd == "check-claude":
         return check_claude(settings)
+    if args.cmd == "relabel":
+        from curio_learn.service import CurioService
+
+        changed = CurioService(settings).relabel_saved()
+        for analysis_id, n in changed.items():
+            print(f"{analysis_id}: {n} section(s) relabeled")
+        print(f"Relabeled {len(changed)} analysis(es).")
+        return 0
     if args.cmd == "course":
         from curio_learn.service import CurioService
 

@@ -103,7 +103,9 @@ A video you've already analyzed with the same goal opens straight away.
 ## The video page
 
 **The watch map** shows the whole video as one line: strong yellow is essential,
-fainter is recommended or optional, hatched is safe to skip. Your playlist is
+fainter is recommended or optional, hatched is safe to skip. Essential parts are
+always in your playlist; a part that scored as essential but didn't fit your watch
+time is shown as recommended, and "How it was scored" says so. Your playlist is
 underlined and a red line shows where playback is. Click any stretch to play it.
 
 **Your playlist** sits beside the player. Each part says what you'll learn and why
@@ -226,10 +228,13 @@ uv run curio queue                           # show the queue (--remove <id> to 
 uv run curio course "<playlist url>"         # add a course
 uv run curio course <course id> --build --minutes 120
 uv run curio check-claude                    # check an Anthropic key with one tiny request
+uv run curio relabel                         # after an update that changes labels: relabel saved analyses (no model calls)
 ```
 
 `analyze` uses your saved goal unless you pass `--profile` or `--objective`, prints the
 playlist, and `--json out.json` saves the full analysis. `--force` analyzes again.
+With Podman, run any other command inside the container, for example
+`podman exec curio curio relabel`.
 
 ## Settings
 

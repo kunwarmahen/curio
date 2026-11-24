@@ -16,7 +16,7 @@ from curio_learn.analysis.course import Lecture, build_course_plan, custom_cours
 from curio_learn.analysis.course_ask import LectureText, answer_course_question, course_passages
 from curio_learn.analysis.notes import generate_notes, scope_key, scope_sections, to_markdown
 from curio_learn.analysis.pipeline import AnalysisPipeline
-from curio_learn.analysis.playlist import PlaylistConfig
+from curio_learn.analysis.playlist import _RANK, PlaylistConfig, fit_labels
 from curio_learn.analysis.study import checklist_fronts, generate_study, is_due, schedule
 from curio_learn.config import Settings, get_settings
 from curio_learn.domain import (
@@ -280,6 +280,32 @@ class CurioService:
             # that process, so run independently.
             analysis_id, _ = self.submit(url, prefs, force=True)
         return self.run(analysis_id, progress)
+
+    def relabel_saved(self) -> dict[str, int]:
+        """Apply the current labeling rule (`fit_labels`: "essential" only for sections in
+        the playlist) to finished analyses saved before it. Only labels change: the
+        playlist, part ids, scores, custom playlists and watched parts stay. No model
+        calls. Returns {analysis id: sections relabeled} for the analyses changed."""
+        changed: dict[str, int] = {}
+        for analysis_id in self.repo.done_analysis_ids():
+            a = self.repo.get_analysis(analysis_id)
+            if a is None or a.playlist is None:
+                continue
+            chosen = {sid for seg in a.playlist.segments for sid in seg.section_ids}
+            labeled = fit_labels(a.sections, chosen, a.playlist.budget_s)
+            n = sum(1 for old, new in zip(a.sections, labeled, strict=True) if old.importance != new.importance)
+            if not n:
+                continue
+            by_id = {s.section.id: s.importance for s in labeled}
+            others = [
+                seg.model_copy(update={"importance": max((by_id[i] for i in seg.section_ids), key=_RANK.get)})
+                if not seg.in_playlist
+                else seg
+                for seg in a.segments
+            ]
+            self.repo.save_result(a.model_copy(update={"sections": labeled, "segments": others}))
+            changed[analysis_id] = n
+        return changed
 
     # ------------------------------------------------------------------ queries
 

@@ -19,7 +19,7 @@ from curio_learn.analysis import prompts
 from curio_learn.domain import Block, Section, fmt_ts
 from curio_learn.errors import LLMError
 from curio_learn.llm.base import LLMProvider, generate_structured
-from curio_learn.processing.normalize import Utterance
+from curio_learn.processing.normalize import Utterance, approx_tokens
 
 log = logging.getLogger(__name__)
 
@@ -52,8 +52,13 @@ def refine_boundaries(
     min_section_s: float = 30.0,
     retries: int = 2,
     progress: Callable[[str], None] = lambda _: None,
+    batch_tokens: int = 20000,
 ) -> tuple[list[Section], list[str], list[str]]:
-    """Return sections with sentence-level starts, plus repairs and warnings."""
+    """Return sections with sentence-level starts, plus repairs and warnings.
+
+    Boundaries go to the model in batches of about `batch_tokens` prompt tokens, so a
+    video with many sections fits the context. Progress is reported once, before the
+    first batch: a pause (checked at progress messages) never interrupts the step."""
     if len(sections) < 2:
         return sections, [], []
     progress("Placing section boundaries at sentence level")
@@ -77,21 +82,42 @@ def refine_boundaries(
     if not windows:
         return sections, [], []
 
-    try:
-        out = generate_structured(
-            provider,
-            BoundariesOut,
-            model=model,
-            system=prompts.BOUNDARY_SYSTEM,
-            user=prompts.boundary_user(parts=parts, ids=list(windows)),
-            max_tokens=60 * len(windows) + 500,
-            retries=retries,
-            task="boundaries",
-        )
-    except LLMError as exc:
-        return sections, [], [f"Kept block-level boundaries: sentence refinement failed ({exc})."]
+    ids = list(windows)
+    batches: list[list[int]] = [[]]
+    tokens = 0
+    for n, part in enumerate(parts):
+        t = approx_tokens(part) + 20
+        if batches[-1] and tokens + t > batch_tokens:
+            batches.append([])
+            tokens = 0
+        batches[-1].append(n)
+        tokens += t
 
-    chosen = {c.boundary_id.strip(): c.first_sentence for c in out.boundaries}
+    chosen: dict[str, int] = {}
+    failed: list[str] = []
+    for k, batch in enumerate(batches, 1):
+        try:
+            out = generate_structured(
+                provider,
+                BoundariesOut,
+                model=model,
+                system=prompts.BOUNDARY_SYSTEM,
+                user=prompts.boundary_user(parts=[parts[n] for n in batch], ids=[ids[n] for n in batch]),
+                max_tokens=60 * len(batch) + 500,
+                retries=retries,
+                task=f"boundaries[{k}]" if len(batches) > 1 else "boundaries",
+            )
+        except LLMError as exc:
+            failed.append(str(exc))
+            continue
+        chosen.update({c.boundary_id.strip(): c.first_sentence for c in out.boundaries})
+    if len(failed) == len(batches):
+        return sections, [], [f"Kept block-level boundaries: sentence refinement failed ({failed[0]})."]
+    warnings = (
+        [f"Kept block-level boundaries for {len(failed)} of {len(batches)} batches of sections ({failed[0]})."]
+        if failed
+        else []
+    )
     repairs: list[str] = []
     starts = [s.start_s for s in sections]
     for i in range(1, len(sections)):
@@ -119,4 +145,4 @@ def refine_boundaries(
         # Ends on the last sentence before the next section begins.
         end = max((u.end_s for u in units if starts[i] <= u.start_s < end), default=end)
         refined.append(s.model_copy(update={"start_s": starts[i], "end_s": end}))
-    return refined, repairs, []
+    return refined, repairs, warnings

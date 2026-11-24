@@ -252,6 +252,10 @@ class Repository:
 
     # ------------------------------------------------------------------- queue
 
+    def done_analysis_ids(self) -> list[str]:
+        with self.session() as db:
+            return list(db.scalars(select(AnalysisRow.id).where(AnalysisRow.status == AnalysisStatus.DONE.value)).all())
+
     def queued_ids(self) -> list[str]:
         """Queued analyses, oldest first."""
         with self.session() as db:

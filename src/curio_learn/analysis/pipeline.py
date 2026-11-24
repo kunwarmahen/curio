@@ -11,7 +11,7 @@ from curio_learn.analysis.ads import remove_ads
 from curio_learn.analysis.boundaries import refine_boundaries
 from curio_learn.analysis.evaluate import evaluate_sections, section_text
 from curio_learn.analysis.outline import Outline, generate_outline
-from curio_learn.analysis.playlist import PlaylistConfig, build_playlist, compute_budget
+from curio_learn.analysis.playlist import PlaylistConfig, build_playlist, compute_budget, fit_labels, select_sections
 from curio_learn.analysis.profiles import learner_brief, spec_for
 from curio_learn.analysis.redundancy import similarity_matrix
 from curio_learn.analysis.scoring import ScoringConfig, score_sections
@@ -135,6 +135,12 @@ class AnalysisPipeline:
         # Claude's long context lets one call see many sections at once.
         return 60000 if self.provider.name == "anthropic" else self.settings.evaluate_batch_tokens
 
+    def _boundary_batch_tokens(self) -> int:
+        # Each batch's prompt plus instructions (~1.5k) and the answer must fit the context.
+        if self.provider.name == "anthropic":
+            return 120000
+        return max(4000, min(20000, self.settings.ollama_num_ctx - 8000))
+
     def _window_tokens(self) -> int:
         if self.provider.name == "anthropic":
             return 150000
@@ -237,6 +243,7 @@ class AnalysisPipeline:
                 units=units,
                 retries=s.llm_max_retries,
                 progress=progress,
+                batch_tokens=self._boundary_batch_tokens(),
             )
             repairs += more_repairs
             warnings += more_warnings
@@ -304,7 +311,11 @@ class AnalysisPipeline:
         budget = compute_budget(
             meta.duration_s, pl_cfg, target_minutes=prefs.target_minutes, fraction=spec_for(prefs).budget_fraction
         )
-        playlist, others = build_playlist(scored, duration_s=meta.duration_s, budget_s=budget, config=pl_cfg)
+        chosen = select_sections(scored, budget, pl_cfg)
+        scored = fit_labels(scored, chosen, budget)
+        playlist, others = build_playlist(
+            scored, duration_s=meta.duration_s, budget_s=budget, config=pl_cfg, chosen=chosen
+        )
 
         progress("Validating results")
         report = validate(

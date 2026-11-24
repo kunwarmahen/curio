@@ -153,3 +153,50 @@ def test_validation_flags_speech_missing_between_sections():
         duration_s=280, blocks=blocks, sections=[s.section for s in secs], playlist=playlist, others=others
     )
     assert any("in no section" in w for w in report.warnings)
+
+
+def test_an_essential_section_that_does_not_fit_is_labeled_recommended():
+    from curio_learn.analysis.playlist import BEYOND_BUDGET, fit_labels
+
+    # Three essential sections of 2 minutes, a 5-minute budget: two fit.
+    secs = [scored(0, 95), scored(1, 90), scored(2, 85), scored(3, 60)]
+    chosen = select_sections(secs, 300, CFG)
+    assert chosen == {"S00", "S01"}
+    labeled = fit_labels(secs, chosen, 300)
+    assert [s.importance for s in labeled] == [
+        Importance.ESSENTIAL,
+        Importance.ESSENTIAL,
+        Importance.RECOMMENDED,
+        Importance.RECOMMENDED,
+    ]
+    note = labeled[2].score.adjustments[-1]
+    assert note.rule == BEYOND_BUDGET and note.delta == 0 and "5-minute" in note.reason
+    assert labeled[2].score.final == 85  # the score itself is unchanged
+    assert secs[2].importance is Importance.ESSENTIAL  # inputs aren't modified
+
+    playlist, others = build_playlist(labeled, duration_s=480, budget_s=300, config=CFG, chosen=chosen)
+    assert [s.section_ids for s in playlist.segments] == [["S00", "S01"]]
+    assert others[0].importance is Importance.RECOMMENDED
+    # Every essential is in the playlist.
+    assert {s.section.id for s in labeled if s.importance is Importance.ESSENTIAL} <= chosen
+
+
+def test_validation_accepts_boundaries_next_to_a_cut_out_ad():
+    # Content ends where the ad's first cue starts and resumes where its last cue ends.
+    secs = [scored(0, 80), scored(1, 0, kind=SectionKind.SPONSOR), scored(2, 80)]
+    blocks = [Block(id="B0", index=0, start_s=0, end_s=360, text="x")]
+    cue_starts = {0.0, 100.0, 120.0, 250.0}
+    cue_ends = {99.0, 240.0, 245.0, 360.0}
+    secs[0].section.end_s = 120.0  # an ad cue's start
+    secs[2].section.start_s = 240.0  # an ad cue's end
+    playlist, others = build_playlist(secs, duration_s=360, budget_s=600, config=CFG)
+    report = validate(
+        duration_s=360,
+        blocks=blocks,
+        sections=[s.section for s in secs],
+        playlist=playlist,
+        others=others,
+        cue_starts=cue_starts,
+        cue_ends=cue_ends,
+    )
+    assert not any("caption times" in w for w in report.warnings), report.warnings

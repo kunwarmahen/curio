@@ -8,6 +8,7 @@ from curio_learn.domain import (
     Importance,
     LearningSegment,
     Playlist,
+    ScoreAdjustment,
     ScoredSection,
     SectionKind,
     SkippedSection,
@@ -132,11 +133,45 @@ def _segment(
     )
 
 
+BEYOND_BUDGET = "beyond_budget"
+
+
+def fit_labels(scored: list[ScoredSection], chosen: set[str], budget_s: float) -> list[ScoredSection]:
+    """Keep "essential" for sections in the playlist. A section that scored as essential
+    but didn't fit the time budget is labeled recommended, with the reason, so the label
+    never says "must watch" about a part the playlist leaves out. The score is unchanged."""
+    minutes = max(1, round(budget_s / 60))
+    out = []
+    for s in scored:
+        if s.importance == Importance.ESSENTIAL and s.section.id not in chosen:
+            note = ScoreAdjustment(
+                rule=BEYOND_BUDGET,
+                delta=0,
+                reason=f"Scored as essential, but didn't fit in your {minutes}-minute playlist "
+                "after the higher-scored parts",
+            )
+            s = s.model_copy(
+                update={
+                    "importance": Importance.RECOMMENDED,
+                    "score": s.score.model_copy(update={"adjustments": [*s.score.adjustments, note]}),
+                }
+            )
+        out.append(s)
+    return out
+
+
 def build_playlist(
-    scored: list[ScoredSection], *, duration_s: float, budget_s: float, config: PlaylistConfig
+    scored: list[ScoredSection],
+    *,
+    duration_s: float,
+    budget_s: float,
+    config: PlaylistConfig,
+    chosen: set[str] | None = None,
 ) -> tuple[Playlist, list[LearningSegment]]:
-    """Return the playlist and the non-selected (but watchable) segments."""
-    chosen = select_sections(scored, budget_s, config)
+    """Return the playlist and the non-selected (but watchable) segments. `chosen` is the
+    selection when the caller already made it (see `fit_labels`)."""
+    if chosen is None:
+        chosen = select_sections(scored, budget_s, config)
     ordered = sorted(scored, key=lambda s: s.section.start_s)
 
     groups: list[list[ScoredSection]] = []
