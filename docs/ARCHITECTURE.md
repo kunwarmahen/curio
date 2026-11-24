@@ -80,6 +80,7 @@ curio/
 │   │   ├── ads.py            cut sponsor reads out of content sections (step 6c)
 │   │   ├── notes.py          learning notes, takeaways, definitions, Markdown export
 │   │   ├── ask.py            Ask the Video: context selection, grounded answers
+│   │   ├── study.py          quizzes and flashcards, spaced-repetition schedule
 │   │   └── pipeline.py       orchestrates the steps, reports progress
 │   ├── storage/
 │   │   ├── orm.py            SQLAlchemy tables
@@ -140,6 +141,12 @@ Takeaway        text, section_ids[], start_s (start of its earliest section)
 Answer          id, analysis_id, question, parts[AnswerPart(text, citations[start_s])],
                 in_video, outside_knowledge (not from the video), context
                 (full|excerpts), search (keyword|keyword+semantic), warnings[]
+StudySet        id, analysis_id, scope, segment_ids[], status, progress,
+                questions[QuizQuestion(id, question, options[], answer, explanation,
+                section_id, start_s)], cards[Flashcard(id, front, back, section_id,
+                start_s)], warnings[]
+QuizAttempt     id, study_id, answers{question id: option}, correct[], score, total
+CardState       study_id, card_id, box (0 = new, 1-6), due_at, reviews, lapses
 ```
 
 All timestamps derive from caption cues. The LLM refers to **block numbers** (outline)
@@ -167,6 +174,15 @@ invent a timestamp: code converts the numbers to the original cue times.
 | `GET`  | `/analyses/{id}/questions` | the conversation, oldest first |
 | `DELETE` | `/analyses/{id}/questions` | clear the conversation → `{deleted}` |
 | `GET`  | `/notes/{id}/markdown` | the notes as a Markdown download, with timestamp links into the video |
+| `POST` | `/analyses/{id}/study` | `{scope, segment_ids?, force?}` → `202 {study_id, status}`; a quiz and flashcards, in the background like notes |
+| `GET`  | `/analyses/{id}/study` | `[StudySet]`, newest first |
+| `GET`  | `/study/{id}` | `StudySet` (poll while `pending`/`running`) |
+| `POST` | `/study/{id}/attempts` | `{answers: {question id: option index}}` → `QuizAttempt` (graded and saved) |
+| `GET`  | `/study/{id}/attempts` | `[QuizAttempt]`, newest first |
+| `GET`  | `/flashcards?study_id=&analysis_id=&limit=` | `FlashcardDeck {cards[DueCard], due, total, next_due_at}`: due cards from every video's newest set, one video's, or one set |
+| `POST` | `/flashcards/review` | `{study_id, card_id, grade: again\|good\|easy}` → `CardState` |
+| `GET`  | `/preferences/default` / `PUT` | the learner's default goal `{profile, custom_objective, target_minutes}` (`PUT` body `{preferences}`) |
+| `POST` | `/queue/preferences` | `{preferences, analysis_ids?, save_default?}` → `{updated[], already_analyzed[]}`: give queued videos a goal (all queued when no ids); a video already analyzed with that goal leaves the queue |
 
 Errors use `{"detail": {"code": "...", "message": "..."}}` with codes
 `invalid_url`, `video_unavailable`, `transcript_unavailable`, `rate_limited`,
@@ -349,7 +365,41 @@ The worker remembers the last reason it waited, which `GET /queue` reports. In
 Podman, `curio.sh` mounts the host's `/etc/localtime` and, when an NVIDIA CDI spec
 exists, adds `--device nvidia.com/gpu=all` so `nvidia-smi` works in the container.
 
-## 12. Phase 1 MVP milestone
+## 12. Quizzes and flashcards (`analysis/study.py`)
+
+**Writing.** The same scopes, batching and sentence numbering as notes. Each section
+header carries a budget by length (under 3 min: 1 question, 2 cards; under 8 min:
+2 and 3; longer: 3 and 4), and code enforces it. Every question and card names the
+sentence that answers it, mapped to that sentence's cue time ("Explained at 55:12").
+A question is `{question, wrong_options[], right_option, explanation, sentence}`:
+there is no answer index for the model to get wrong (an earlier version with
+`correct: 4` produced a mislabeled key). Code keeps 2-4 distinct wrong options and
+shuffles them with the right one, seeded by the question text.
+
+**Checking.** One more call over all questions replaces "wrong" options that are also
+correct or near-copies of the answer, tops them up to three, and asks for every option
+to fit a word range around the longest wrong one, because a right answer that is the
+longest option is a giveaway. Measured on the CS329Z playlist (8 questions):
+
+| Version | Right answer longest | Problems |
+|---|---|---|
+| first prompt | 7 of 8, by 20-50% | explanations said "the section" |
+| "keep options similar in length" | 7 of 8 | |
+| right answer written last, `correct: 4` | 5 of 8 | one key pointed at a wrong option |
+| separate `right_option` field | 8 of 8 | one "wrong" option was correct |
+| + checking call, character limit | 7 of 8 | |
+| + checking call, word range | 5 of 8, mostly by 3-12% | one clear giveaway (150 vs 114 chars) |
+
+Chance is 2 of 8. The checking call costs 10-15 s; the set took 45-75 s in total.
+
+**Spaced repetition.** Leitner boxes: a card with no state is new (due now).
+"Forgot" puts it in box 1, due in 10 minutes (a lapse if it had been learned);
+"Remembered" moves it up one box and "Easy" two, due after 1, 3, 7, 16, 35 or 90 days.
+The review deck is each analysis's newest finished set (writing a new set replaces
+the cards in review; the old set can still be drilled from the tab by `study_id`):
+overdue cards first, most overdue first, then new cards in video order.
+
+## 13. Phase 1 MVP milestone
 
 **Done when:** pasting the test lecture (`e_m99aR7_3Q`, 80 min) produces a
 validated playlist of about 15–30 minutes in which every segment has an accurate

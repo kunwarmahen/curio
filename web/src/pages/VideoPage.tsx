@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ApiError, api, type Analysis, type Segment } from '../api'
 import { AskPanel } from '../components/Ask'
 import { NotesPanel } from '../components/Notes'
+import { PracticePanel } from '../components/Practice'
 import { Player, type Clip } from '../components/Player'
 import { WatchMap, WatchMapLegend, type Stretch } from '../components/WatchMap'
 import { IMPORTANCE_LABEL, PROFILES, clock, duration, queueHours } from '../format'
@@ -162,7 +163,7 @@ function Failed({ analysis }: { analysis: Analysis }) {
   )
 }
 
-type Tab = 'notes' | 'ask' | 'more' | 'skip' | 'scoring'
+type Tab = 'notes' | 'practice' | 'ask' | 'more' | 'skip' | 'scoring'
 
 function Results({ analysis }: { analysis: Analysis }) {
   const playlist = analysis.playlist!
@@ -333,6 +334,9 @@ function Results({ analysis }: { analysis: Analysis }) {
           <TabButton id="notes" tab={tab} setTab={setTab}>
             Notes
           </TabButton>
+          <TabButton id="practice" tab={tab} setTab={setTab}>
+            Quiz and flashcards
+          </TabButton>
           <TabButton id="ask" tab={tab} setTab={setTab}>
             Ask the video
           </TabButton>
@@ -348,6 +352,7 @@ function Results({ analysis }: { analysis: Analysis }) {
         </div>
         <div className="tabpanel" role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`}>
           {tab === 'notes' && <NotesPanel analysis={analysis} onSeek={seek} />}
+          {tab === 'practice' && <PracticePanel analysis={analysis} onSeek={seek} />}
           {tab === 'ask' && <AskPanel analysis={analysis} onSeek={seek} />}
           {tab === 'more' && (
             <>

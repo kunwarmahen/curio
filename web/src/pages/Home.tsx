@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useState } from 'react'
-import { ApiError, api, type Profile, type QueueStatus, type RecentVideo } from '../api'
+import {
+  ApiError,
+  api,
+  type FlashcardDeck,
+  type Preferences,
+  type Profile,
+  type QueueStatus,
+  type RecentVideo,
+} from '../api'
 import { QueueList } from '../components/Queue'
 import { WatchMap } from '../components/WatchMap'
 import { PROFILES, duration, queueHours } from '../format'
@@ -18,6 +26,9 @@ export function Home() {
   const [queued, setQueued] = useState('')
   const [recent, setRecent] = useState<RecentVideo[] | null>(null)
   const [queue, setQueue] = useState<QueueStatus | null>(null)
+  const [showMore, setShowMore] = useState(false)
+  const [deck, setDeck] = useState<FlashcardDeck | null>(null)
+  const prefs: Preferences = { profile, custom_objective: goal.trim(), target_minutes: minutes }
 
   const loadQueue = useCallback(() => {
     api.queue().then(setQueue, () => {})
@@ -25,7 +36,15 @@ export function Home() {
 
   useEffect(() => {
     api.recent().then(setRecent, () => setRecent([]))
+    api.flashcards(undefined, 0).then(setDeck, () => {})
     loadQueue()
+    // Start from the goal used last time (saved on the server, so every device shares it).
+    api.defaultPreferences().then((p) => {
+      setProfile(p.profile)
+      setGoal(p.custom_objective)
+      setMinutes(p.target_minutes)
+      if (p.custom_objective || p.target_minutes) setShowMore(true)
+    }, () => {})
   }, [loadQueue])
 
   // While something waits or runs, keep its state current (it changes overnight).
@@ -48,12 +67,8 @@ export function Home() {
     setError('')
     setQueued('')
     try {
-      const { analysis_id, status } = await api.analyze(
-        url.trim(),
-        { profile, custom_objective: goal.trim(), target_minutes: minutes },
-        force,
-        mode === 'queue',
-      )
+      const { analysis_id, status } = await api.analyze(url.trim(), prefs, force, mode === 'queue')
+      api.setDefaultPreferences(prefs).catch(() => {})
       if (status !== 'queued') {
         navigate(`/v/${analysis_id}`)
         return
@@ -138,7 +153,11 @@ export function Home() {
           <p className="hint">{PROFILES[profile].hint}</p>
         </fieldset>
 
-        <details className="more-options">
+        <details
+          className="more-options"
+          open={showMore}
+          onToggle={(e) => setShowMore((e.currentTarget as HTMLDetailsElement).open)}
+        >
           <summary>Describe your own goal or set a watch time</summary>
           <label className="field-label" htmlFor="goal">
             Your goal, in your words
@@ -172,7 +191,16 @@ export function Home() {
         </details>
       </form>
 
-      {queue && <QueueList queue={queue} onChange={loadQueue} />}
+      {deck && deck.due > 0 && (
+        <a className="due" {...linkProps('/review')}>
+          <span className="due__count">{deck.due}</span>
+          <span>
+            flashcard{deck.due === 1 ? '' : 's'} to review today. <span className="due__go">Review now</span>
+          </span>
+        </a>
+      )}
+
+      {queue && <QueueList queue={queue} onChange={loadQueue} goal={prefs} />}
 
       <section className="recent" aria-labelledby="recent-heading">
         <h2 id="recent-heading">Recently analyzed</h2>

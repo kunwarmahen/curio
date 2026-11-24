@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     llm_model_evaluate: str = ""
     llm_model_notes: str = ""
     llm_model_ask: str = ""
+    llm_model_study: str = ""
     llm_max_retries: int = 2
     llm_temperature: float = 0.2
 
@@ -115,6 +116,7 @@ class Settings(BaseSettings):
             "evaluate": self.llm_model_evaluate,
             "notes": self.llm_model_notes,
             "ask": self.llm_model_ask,
+            "study": self.llm_model_study,
         }.get(task, "")
         if override:
             return override

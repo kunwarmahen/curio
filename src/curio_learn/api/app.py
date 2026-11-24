@@ -19,9 +19,14 @@ from curio_learn.domain import (
     AnalysisStatus,
     Answer,
     Block,
+    CardGrade,
+    CardState,
+    FlashcardDeck,
     LearningNotes,
     LearningPreferences,
     NotesScope,
+    QuizAttempt,
+    StudySet,
     VideoAnalysis,
 )
 from curio_learn.errors import CurioError, InvalidURL
@@ -58,6 +63,33 @@ class NotesRequest(BaseModel):
 
 class AskRequest(BaseModel):
     question: str
+
+
+class StudyAccepted(BaseModel):
+    study_id: str
+    status: AnalysisStatus
+
+
+class AttemptRequest(BaseModel):
+    answers: dict[str, int]  # question id -> chosen option index
+
+
+class ReviewRequest(BaseModel):
+    study_id: str
+    card_id: str
+    grade: CardGrade
+
+
+class PreferencesBody(BaseModel):
+    preferences: LearningPreferences
+
+
+class RetargetRequest(BaseModel):
+    preferences: LearningPreferences
+    # Empty = every video waiting in the queue.
+    analysis_ids: list[str] = []
+    # Also save these preferences as the default for new videos.
+    save_default: bool = True
 
 
 class NotesAccepted(BaseModel):
@@ -231,6 +263,51 @@ def create_app(service: CurioService | None = None) -> FastAPI:
             headers={"Content-Disposition": f'attachment; filename="curio-notes-{notes_id}.md"'},
         )
 
+    @app.post("/api/v1/analyses/{analysis_id}/study", status_code=202, response_model=StudyAccepted)
+    def create_study(analysis_id: str, body: NotesRequest, request: Request):
+        s = svc(request)
+        try:
+            study_id, needs_run = s.submit_study(analysis_id, body.scope, body.segment_ids, force=body.force)
+        except KeyError:
+            raise HTTPException(404, {"code": "not_found", "message": "Unknown analysis id"}) from None
+        if needs_run:
+            jobs.submit(_run_study_safely, s, study_id)
+        current = s.get_study(study_id)
+        return StudyAccepted(study_id=study_id, status=current.status if current else AnalysisStatus.PENDING)
+
+    @app.get("/api/v1/analyses/{analysis_id}/study", response_model=list[StudySet])
+    def list_study(analysis_id: str, request: Request):
+        return svc(request).list_study(analysis_id)
+
+    @app.get("/api/v1/study/{study_id}", response_model=StudySet)
+    def get_study(study_id: str, request: Request):
+        study = svc(request).get_study(study_id)
+        if study is None:
+            raise HTTPException(404, {"code": "not_found", "message": "Unknown quiz id"})
+        return study
+
+    @app.post("/api/v1/study/{study_id}/attempts", response_model=QuizAttempt)
+    def grade_quiz(study_id: str, body: AttemptRequest, request: Request):
+        try:
+            return svc(request).grade_quiz(study_id, body.answers)
+        except KeyError:
+            raise HTTPException(404, {"code": "not_found", "message": "Unknown quiz id"}) from None
+
+    @app.get("/api/v1/study/{study_id}/attempts", response_model=list[QuizAttempt])
+    def quiz_attempts(study_id: str, request: Request):
+        return svc(request).quiz_attempts(study_id)
+
+    @app.get("/api/v1/flashcards", response_model=FlashcardDeck)
+    def flashcards(request: Request, analysis_id: str | None = None, study_id: str | None = None, limit: int = 50):
+        return svc(request).flashcards(analysis_id, study_id=study_id, limit=min(max(limit, 0), 500))
+
+    @app.post("/api/v1/flashcards/review", response_model=CardState)
+    def review_card(body: ReviewRequest, request: Request):
+        try:
+            return svc(request).review_card(body.study_id, body.card_id, body.grade)
+        except KeyError:
+            raise HTTPException(404, {"code": "not_found", "message": "Unknown flashcard"}) from None
+
     @app.post("/api/v1/analyses/{analysis_id}/questions", response_model=Answer)
     def ask(analysis_id: str, body: AskRequest, request: Request):
         # Synchronous: an answer takes seconds, not minutes, and runs beside analyses
@@ -249,6 +326,22 @@ def create_app(service: CurioService | None = None) -> FastAPI:
     @app.delete("/api/v1/analyses/{analysis_id}/questions")
     def clear_conversation(analysis_id: str, request: Request):
         return {"deleted": svc(request).clear_conversation(analysis_id)}
+
+    @app.get("/api/v1/preferences/default", response_model=LearningPreferences)
+    def default_preferences(request: Request):
+        return svc(request).default_preferences()
+
+    @app.put("/api/v1/preferences/default", response_model=LearningPreferences)
+    def set_default_preferences(body: PreferencesBody, request: Request):
+        svc(request).set_default_preferences(body.preferences)
+        return body.preferences
+
+    @app.post("/api/v1/queue/preferences")
+    def retarget_queue(body: RetargetRequest, request: Request):
+        s = svc(request)
+        if body.save_default:
+            s.set_default_preferences(body.preferences)
+        return s.retarget_queued(body.preferences, body.analysis_ids or None)
 
     @app.get("/api/v1/queue", response_model=QueueStatus)
     def queue_status(request: Request):
@@ -309,6 +402,13 @@ def _run_safely(service: CurioService, analysis_id: str) -> None:
         service.run(analysis_id)
     except Exception:  # status is already recorded as failed by the service
         log.warning("Analysis %s failed", analysis_id, exc_info=True)
+
+
+def _run_study_safely(service: CurioService, study_id: str) -> None:
+    try:
+        service.run_study(study_id)
+    except Exception:
+        log.warning("Study set %s failed", study_id, exc_info=True)
 
 
 def _run_notes_safely(service: CurioService, notes_id: str) -> None:

@@ -5,18 +5,26 @@ from __future__ import annotations
 import logging
 import uuid
 from collections.abc import Callable
+from datetime import UTC, datetime
 
 from curio_learn.analysis.ask import answer_question
 from curio_learn.analysis.notes import generate_notes, scope_key, scope_sections, to_markdown
 from curio_learn.analysis.pipeline import AnalysisPipeline
+from curio_learn.analysis.study import generate_study, is_due, schedule
 from curio_learn.config import Settings, get_settings
 from curio_learn.domain import (
     AnalysisStatus,
     Answer,
     Block,
+    CardGrade,
+    CardState,
+    DueCard,
+    FlashcardDeck,
     LearningNotes,
     LearningPreferences,
     NotesScope,
+    QuizAttempt,
+    StudySet,
     VideoAnalysis,
     VideoMetadata,
 )
@@ -36,6 +44,8 @@ log = logging.getLogger(__name__)
 PIPELINE_VERSION = 5
 # Bump when notes generation changes should invalidate saved notes.
 NOTES_VERSION = 1
+# Bump when quiz and flashcard generation changes should invalidate saved sets.
+STUDY_VERSION = 2
 
 Progress = Callable[[str], None]
 
@@ -135,6 +145,36 @@ class CurioService:
 
     def remove_queued(self, analysis_id: str) -> bool:
         return self.repo.remove_queued(analysis_id)
+
+    # ------------------------------------------------------------- default goal
+
+    def default_preferences(self) -> LearningPreferences:
+        """The goal the learner last chose, used for new videos."""
+        saved = self.repo.get_setting("default_preferences")
+        return LearningPreferences.model_validate(saved) if saved else LearningPreferences()
+
+    def set_default_preferences(self, prefs: LearningPreferences) -> None:
+        self.repo.set_setting("default_preferences", prefs.model_dump(mode="json"))
+
+    def retarget_queued(
+        self, prefs: LearningPreferences, analysis_ids: list[str] | None = None
+    ) -> dict[str, list[str]]:
+        """Give queued videos a new goal. Returns the ids updated, and the ids removed
+        because that video was already analyzed (or queued) with this goal."""
+        ids = analysis_ids or self.repo.queued_ids()
+        key = self.llm_key()
+        updated, merged = [], []
+        for analysis_id in ids:
+            video_id = self.repo.video_of(analysis_id)
+            if video_id is None:
+                continue
+            existing = self.repo.find_cached(video_id, prefs, key) or self.repo.find_in_progress(video_id, prefs, key)
+            if existing and existing != analysis_id:
+                if self.repo.remove_queued(analysis_id):
+                    merged.append(analysis_id)
+            elif self.repo.set_queued_preferences(analysis_id, prefs):
+                updated.append(analysis_id)
+        return {"updated": updated, "already_analyzed": merged}
 
     def run(self, analysis_id: str, progress: Progress = lambda _: None) -> VideoAnalysis:
         pending = self.repo.get_analysis(analysis_id)
@@ -303,6 +343,175 @@ class CurioService:
             return None
         analysis = self.repo.get_analysis(notes.analysis_id)
         return to_markdown(notes, analysis) if analysis else None
+
+    # ---------------------------------------------------- quiz and flashcards
+
+    def study_llm_key(self) -> str:
+        return f"{self.llm.name}:{self.settings.model_for('study')}:s{STUDY_VERSION}"
+
+    def submit_study(
+        self,
+        analysis_id: str,
+        scope: NotesScope = NotesScope.PLAYLIST,
+        segment_ids: list[str] | None = None,
+        *,
+        force: bool = False,
+    ) -> tuple[str, bool]:
+        """Register a quiz and flashcards for an analysis. Returns (study_id, needs_run)."""
+        analysis = self.repo.get_analysis(analysis_id)
+        if analysis is None:
+            raise KeyError(analysis_id)
+        if analysis.status != AnalysisStatus.DONE:
+            raise AnalysisError("A quiz can be written once the analysis has finished.")
+        ids = sorted(set(segment_ids or [])) if scope is NotesScope.SELECTED else []
+        scope_sections(analysis, scope, ids)  # validates the selection
+        key, llm_key = scope_key(scope, ids), self.study_llm_key()
+        if not force:
+            existing = self.repo.find_study(analysis_id, key, llm_key)
+            if existing:
+                return existing, False
+        study_id = uuid.uuid4().hex[:12]
+        self.repo.create_study(study_id, analysis_id, scope, ids, key, llm_key)
+        return study_id, True
+
+    def run_study(self, study_id: str, progress: Progress = lambda _: None) -> StudySet:
+        pending = self.repo.get_study(study_id)
+        if pending is None:
+            raise KeyError(study_id)
+
+        def report(msg: str) -> None:
+            log.info("[study %s] %s", study_id, msg)
+            self.repo.update_study_status(study_id, AnalysisStatus.RUNNING, msg)
+            progress(msg)
+
+        try:
+            report("Loading transcript")
+            analysis = self.repo.get_analysis(pending.analysis_id)
+            transcript = self.repo.get_transcript(analysis.video.video_id) if analysis else None
+            if analysis is None or transcript is None:
+                raise AnalysisError("The analysis or its transcript is no longer stored.")
+            study = generate_study(
+                self.llm,
+                model=self.settings.model_for("study"),
+                analysis=analysis,
+                units=boundary_units(transcript.cues),
+                scope=pending.scope,
+                segment_ids=pending.segment_ids,
+                study_id=study_id,
+                batch_tokens=60000 if self.llm.name == "anthropic" else self.settings.evaluate_batch_tokens,
+                retries=self.settings.llm_max_retries,
+                progress=report,
+            )
+            study.created_at = pending.created_at
+            self.repo.save_study(study)
+            return study
+        except CurioError as exc:
+            self.repo.update_study_status(study_id, AnalysisStatus.FAILED, error=exc.message)
+            raise
+        except Exception as exc:
+            log.exception("Study set %s failed", study_id)
+            self.repo.update_study_status(study_id, AnalysisStatus.FAILED, error=f"Unexpected error: {exc}")
+            raise
+
+    def study(
+        self,
+        analysis_id: str,
+        scope: NotesScope = NotesScope.PLAYLIST,
+        segment_ids: list[str] | None = None,
+        *,
+        force: bool = False,
+        progress: Progress = lambda _: None,
+    ) -> StudySet:
+        """Synchronous convenience: submit and run (or return the saved set)."""
+        study_id, needs_run = self.submit_study(analysis_id, scope, segment_ids, force=force)
+        if not needs_run:
+            saved = self.repo.get_study(study_id)
+            if saved is not None and saved.status == AnalysisStatus.DONE:
+                return saved
+            study_id, _ = self.submit_study(analysis_id, scope, segment_ids, force=True)
+        return self.run_study(study_id, progress)
+
+    def get_study(self, study_id: str) -> StudySet | None:
+        return self.repo.get_study(study_id)
+
+    def list_study(self, analysis_id: str) -> list[StudySet]:
+        return self.repo.list_study(analysis_id)
+
+    def grade_quiz(self, study_id: str, answers: dict[str, int]) -> QuizAttempt:
+        """Score a quiz attempt and save it. Unanswered questions count as wrong."""
+        study = self.repo.get_study(study_id)
+        if study is None:
+            raise KeyError(study_id)
+        if study.status != AnalysisStatus.DONE or not study.questions:
+            raise AnalysisError("This quiz has no questions yet.")
+        known = {q.id for q in study.questions}
+        answers = {k: v for k, v in answers.items() if k in known}
+        correct = [q.id for q in study.questions if answers.get(q.id) == q.answer]
+        attempt = QuizAttempt(
+            id=uuid.uuid4().hex[:12],
+            study_id=study_id,
+            answers=answers,
+            correct=correct,
+            score=len(correct),
+            total=len(study.questions),
+        )
+        self.repo.save_attempt(attempt)
+        return attempt
+
+    def quiz_attempts(self, study_id: str) -> list[QuizAttempt]:
+        return self.repo.list_attempts(study_id)
+
+    def flashcards(
+        self,
+        analysis_id: str | None = None,
+        *,
+        study_id: str | None = None,
+        limit: int = 50,
+        now: datetime | None = None,
+    ) -> FlashcardDeck:
+        """Cards due now: overdue reviews first (most overdue first), then new cards in
+        video order. From every video's newest set, one video's, or one given set."""
+        now = now or datetime.now(UTC)
+        if study_id:
+            study = self.repo.get_study(study_id)
+            analysis = self.repo.get_analysis(study.analysis_id) if study else None
+            decks = [(study, analysis.video)] if study and analysis and study.status == AnalysisStatus.DONE else []
+        else:
+            decks = [(s, v) for s, v in self.repo.decks() if analysis_id is None or s.analysis_id == analysis_id]
+        states = self.repo.card_states([s.id for s, _ in decks])
+        due: list[DueCard] = []
+        upcoming: list[datetime] = []
+        total = 0
+        for study, video in decks:
+            for card in study.cards:
+                total += 1
+                state = states.get((study.id, card.id)) or CardState(study_id=study.id, card_id=card.id)
+                if not is_due(state, now):
+                    upcoming.append(state.due_at)
+                    continue
+                due.append(
+                    DueCard(
+                        card=card,
+                        state=state,
+                        study_id=study.id,
+                        analysis_id=study.analysis_id,
+                        video_title=video.title,
+                        video_url=video.url,
+                    )
+                )
+        due.sort(key=lambda d: (d.state.due_at is None, d.state.due_at or now))
+        return FlashcardDeck(cards=due[:limit], due=len(due), total=total, next_due_at=min(upcoming, default=None))
+
+    def review_card(self, study_id: str, card_id: str, grade: CardGrade, *, now: datetime | None = None) -> CardState:
+        study = self.repo.get_study(study_id)
+        if study is None or all(c.id != card_id for c in study.cards):
+            raise KeyError(f"{study_id}/{card_id}")
+        state = self.repo.card_states([study_id]).get((study_id, card_id)) or CardState(
+            study_id=study_id, card_id=card_id
+        )
+        new = schedule(state, grade, now or datetime.now(UTC))
+        self.repo.save_card_state(new)
+        return new
 
     # --------------------------------------------------------- ask the video
 

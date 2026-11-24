@@ -134,6 +134,52 @@ class FakeLLM:
                     }
                 )
             return json.dumps({"sections": entries})
+        if name == "QuizReviewOut":
+            import re
+
+            # Shortens nothing; replaces q1's wrong options and drops an entry for an unknown id.
+            ids = re.findall(r"^id: (q\d+)$", user, re.M)
+            entries = [{"id": "q999", "wrong_options": ["x", "y", "z"], "right_option": "r"}]
+            if ids:
+                right = re.search(r"^right answer: (.*)$", user, re.M).group(1)
+                entries.append(
+                    {
+                        "id": ids[0],
+                        "wrong_options": ["New wrong 1", "New wrong 2", "New wrong 3"],
+                        "right_option": right,
+                    }
+                )
+            return json.dumps({"questions": entries})
+        if name == "StudyOut":
+            import re
+
+            entries = []
+            for part in user.split("### ")[1:]:
+                sid = part.split(" ", 1)[0]
+                n = len(re.findall(r"^\d+\. ", part, re.M))
+                questions = [
+                    {
+                        "question": f"What does {sid} show?",
+                        "wrong_options": ["Something else", "A third thing", "  "],
+                        "right_option": f"The idea of {sid}",
+                        "explanation": f"{sid} says so.",
+                        "sentence": 2,
+                    }
+                ]
+                if sid == "S01":  # an unusable question: only one distinct wrong option
+                    broken = {"question": "Broken?", "wrong_options": ["a", "A", " "], "right_option": "b"}
+                    questions.append({**broken, "explanation": "", "sentence": 1})
+                entries.append(
+                    {
+                        "section_id": sid,
+                        "questions": questions,
+                        "cards": [
+                            {"front": f"Term {sid}", "back": f"Meaning of {sid}.", "sentence": 1},
+                            {"front": f"Why {sid}?", "back": "Because.", "sentence": n + 5},
+                        ],
+                    }
+                )
+            return json.dumps({"sections": entries})
         if name == "NotesSummaryOut":
             import re
 

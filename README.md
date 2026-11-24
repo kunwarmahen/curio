@@ -21,7 +21,8 @@ takeaways and recommendations, each linked to the moment it's said). From Phase 
 **Ask the Video** is in: questions answered from the transcript with clickable
 timestamps, keeping anything that isn't from the video apart. An **overnight
 queue** lets you add videos at any time and have them analyzed at night, when the
-GPU is free. See
+GPU is free. **Quizzes and flashcards** (with spaced repetition) test what a video
+teaches. See
 [docs/PROGRESS.md](docs/PROGRESS.md) for details and
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design.
 
@@ -52,6 +53,7 @@ uv run curio analyze "https://www.youtube.com/watch?v=e_m99aR7_3Q" \
     --profile technical --objective "how GEPA optimizes prompts" --minutes 20
 uv run curio notes <analysis id> --scope playlist --out notes.md   # learning notes
 uv run curio ask <analysis id> "Where does the speaker explain GRPO?"
+uv run curio quiz <analysis id> --scope video     # write and print a quiz and flashcards
 uv run curio queue "<youtube url>" --profile technical   # analyze tonight (curio api runs the queue)
 uv run curio queue                                       # list the queue; --remove <id> takes one out
 ```
@@ -84,6 +86,22 @@ is shown in a separate box labeled "Not from the video", and questions the video
 doesn't cover say so. The conversation is saved, and follow-ups know what was
 asked before. With the local model, the first question about a video takes about
 40 s (the model reads the whole transcript) and follow-ups 5–10 s.
+
+The **Quiz and flashcards** tab writes a multiple-choice quiz and a deck of
+flashcards from the transcript of your playlist or the whole video (with the local
+model, about 50 s for a 26-minute playlist: 8 questions, 12 cards). After you check
+your answers, each question shows the right answer, why, and the moment in the video
+that explains it. Flashcards use spaced repetition: "Forgot" brings a card back in
+10 minutes, "Remembered" and "Easy" move it to a longer gap (1, 3, 7, 16, 35, then
+90 days). The home page shows how many cards are due, and the **review page**
+(`/review`) goes through the due cards from all your videos (each video's newest
+set).
+
+**Your goal is remembered.** The profile, goal and watch time you last used are
+saved on the server (so every device shares them) and filled in for the next video;
+`curio analyze` and `curio queue` use them too unless you pass `--profile` or
+`--objective`. Videos waiting in the queue keep the goal they were added with; the
+queue on the home page has a button to give them the goal currently in the form.
 
 **Queue for later** (beside "Find the best parts") adds a video to the overnight
 queue instead of analyzing it now. The server analyzes queued videos one at a time,
@@ -166,7 +184,7 @@ most important ones:
 | Variable | Default | Meaning |
 |---|---|---|
 | `CURIO_LLM_PROVIDER` | `auto` | `auto` uses Anthropic if `ANTHROPIC_API_KEY` is set, otherwise Ollama |
-| `CURIO_LLM_MODEL` | provider default | model for all tasks; `CURIO_LLM_MODEL_OUTLINE` / `_EVALUATE` / `_NOTES` / `_ASK` override per task |
+| `CURIO_LLM_MODEL` | provider default | model for all tasks; `CURIO_LLM_MODEL_OUTLINE` / `_EVALUATE` / `_NOTES` / `_ASK` / `_STUDY` override per task |
 | `CURIO_ASK_CONTEXT_TOKENS` | `0` (auto) | transcript tokens Ask may show the model; longer transcripts are searched |
 | `CURIO_EMBED_MODEL` | `nomic-embed-text` | Ollama embedding model for searching long transcripts; empty = keyword search only |
 | `CURIO_QUEUE_HOURS` | `1-7` | local hours when queued videos are analyzed (`22:30-6` crosses midnight); empty = any time the GPU is idle |
@@ -221,6 +239,11 @@ most important ones:
     otherwise the passages found by keyword (BM25) and embedding search, plus the
     stretch the question names by time. Answer parts cite passage numbers, which code
     turns into the start of the best-matching sentence in each passage.
+12. **Quiz and flashcards (LLM, on request):** like notes, sections as numbered
+    sentences, with a question and card budget per section; each item names the
+    sentence that answers it. The model writes the right answer and the wrong options
+    in separate fields; code shuffles them. A second call checks every question:
+    replaces "wrong" options that are also right and evens out option lengths.
 
 ## Tests
 

@@ -186,6 +186,77 @@ export interface Answer {
   elapsed_s: number
 }
 
+export interface QuizQuestion {
+  id: string
+  question: string
+  options: string[]
+  answer: number
+  explanation: string
+  section_id: string
+  start_s: number
+}
+
+export interface Flashcard {
+  id: string
+  front: string
+  back: string
+  section_id: string
+  start_s: number
+}
+
+export interface StudySet {
+  id: string
+  analysis_id: string
+  video_id: string
+  scope: NotesScope
+  segment_ids: string[]
+  status: Status
+  progress: string
+  error: string
+  questions: QuizQuestion[]
+  cards: Flashcard[]
+  warnings: string[]
+  created_at: string
+  elapsed_s: number
+}
+
+export interface QuizAttempt {
+  id: string
+  study_id: string
+  answers: Record<string, number>
+  correct: string[]
+  score: number
+  total: number
+  created_at: string
+}
+
+export type CardGrade = 'again' | 'good' | 'easy'
+
+export interface CardState {
+  study_id: string
+  card_id: string
+  box: number
+  due_at: string | null
+  reviews: number
+  lapses: number
+}
+
+export interface DueCard {
+  card: Flashcard
+  state: CardState
+  study_id: string
+  analysis_id: string
+  video_title: string
+  video_url: string
+}
+
+export interface FlashcardDeck {
+  cards: DueCard[]
+  due: number
+  total: number
+  next_due_at: string | null
+}
+
 export interface QueueItem {
   analysis_id: string
   video: VideoMetadata
@@ -241,6 +312,14 @@ export const api = {
       body: JSON.stringify({ url, preferences, force, queue }),
     }),
   queue: () => request<QueueStatus>('/queue'),
+  defaultPreferences: () => request<Preferences>('/preferences/default'),
+  setDefaultPreferences: (preferences: Preferences) =>
+    request<Preferences>('/preferences/default', { method: 'PUT', body: JSON.stringify({ preferences }) }),
+  retargetQueue: (preferences: Preferences, analysisIds: string[] = []) =>
+    request<{ updated: string[]; already_analyzed: string[] }>('/queue/preferences', {
+      method: 'POST',
+      body: JSON.stringify({ preferences, analysis_ids: analysisIds }),
+    }),
   queueStart: (id: string) =>
     request<{ analysis_id: string; status: Status }>(`/queue/${encodeURIComponent(id)}/start`, { method: 'POST' }),
   queueRemove: (id: string) => request<{ removed: string }>(`/queue/${encodeURIComponent(id)}`, { method: 'DELETE' }),
@@ -268,4 +347,25 @@ export const api = {
   clearConversation: (analysisId: string) =>
     request<{ deleted: number }>(`/analyses/${encodeURIComponent(analysisId)}/questions`, { method: 'DELETE' }),
   recent: () => request<RecentVideo[]>('/videos/recent?limit=12'),
+  studyList: (analysisId: string) => request<StudySet[]>(`/analyses/${encodeURIComponent(analysisId)}/study`),
+  writeStudy: (analysisId: string, scope: NotesScope, force = false) =>
+    request<{ study_id: string; status: Status }>(`/analyses/${encodeURIComponent(analysisId)}/study`, {
+      method: 'POST',
+      body: JSON.stringify({ scope, force }),
+    }),
+  study: (id: string) => request<StudySet>(`/study/${encodeURIComponent(id)}`),
+  gradeQuiz: (id: string, answers: Record<string, number>) =>
+    request<QuizAttempt>(`/study/${encodeURIComponent(id)}/attempts`, {
+      method: 'POST',
+      body: JSON.stringify({ answers }),
+    }),
+  quizAttempts: (id: string) => request<QuizAttempt[]>(`/study/${encodeURIComponent(id)}/attempts`),
+  /** Due cards from every video's newest set, or from one set. */
+  flashcards: (studyId?: string, limit = 50) =>
+    request<FlashcardDeck>(`/flashcards?limit=${limit}${studyId ? `&study_id=${encodeURIComponent(studyId)}` : ''}`),
+  reviewCard: (studyId: string, cardId: string, grade: CardGrade) =>
+    request<CardState>('/flashcards/review', {
+      method: 'POST',
+      body: JSON.stringify({ study_id: studyId, card_id: cardId, grade }),
+    }),
 }

@@ -10,7 +10,7 @@
 | Deployment | ✅ Podman image + `curio.sh` |
 | Phase 2: Intelligent learning | ✅ learning profiles, custom objective, redundancy detection, skip recommendations, sentence-level boundaries, mid-roll ad removal and learning notes |
 | LAN access | ✅ app and Podman container listen on all interfaces by default |
-| Phase 3: Interactive learning | 🟡 Ask the Video (grounded answers, timestamps, hybrid search) and segment completion tracking; quizzes, flashcards and saved playlists are not built |
+| Phase 3: Interactive learning | 🟡 Ask the Video, quizzes and flashcards with spaced repetition, a remembered default goal, and segment completion tracking; saved custom playlists are not built |
 | Overnight queue | ✅ queue videos any time; analyzed 1–7 AM while the GPU is idle |
 | Phase 4: Multi-video intelligence | ⏳ not started |
 
@@ -33,7 +33,7 @@
 - `storage`: SQLAlchemy/SQLite (videos, transcripts, analyses, segments),
   cache keyed by video + preferences + model + pipeline version.
 - `service`, FastAPI (`/api/v1`), CLI. (A Streamlit UI was built first and then replaced; see the UI log below.)
-- 98 offline tests at the end of Phase 1 (105 with notes, 115 with Ask the Video, 121 with the overnight queue) (ad detection and carving, sentence units and boundary refinement, URL parsing, normalization, segmentation repair, scoring and
+- 98 offline tests at the end of Phase 1 (105 with notes, 115 with Ask the Video, 121 with the overnight queue, 131 with quizzes, flashcards and the default goal) (ad detection and carving, sentence units and boundary refinement, URL parsing, normalization, segmentation repair, scoring and
   calibration, playlist and prerequisites, validation, LLM retry, request shapes and
   truncation guard, service caching, stale runs, API).
 
@@ -331,6 +331,36 @@ Checked against the real machine, with a scratch database on port 8471:
 - Inside the container: `--device nvidia.com/gpu=all` (CDI) makes `nvidia-smi` work
   for the non-root user, and mounting `/etc/localtime` gives local time.
 
+### Default goal, quizzes and flashcards (2026-11-23)
+
+Requested: quizzes and flashcards; and goals that carry over to new videos and can
+be applied to queued ones. Built:
+- A saved default goal (`settings` table, `GET/PUT /preferences/default`), filled in
+  on the home page and used by the CLI, and `POST /queue/preferences` with a "Use the
+  goal above for the waiting videos" button. Queued videos show their goal.
+- `analysis/study.py`, three tables (`study_sets`, `quiz_attempts`, `card_states`),
+  seven routes, `curio quiz`, the "Quiz and flashcards" tab, the `/review` page and
+  the "flashcards to review" link on the home page. Design in ARCHITECTURE.md §12.
+  10 new tests.
+
+Checked on the CS329Z lecture (playlist, 26 min) with the local model:
+- 8 questions and 12 cards in 45-75 s. Every number and claim in the first set was
+  checked against the transcript (FireAct 34% vs 31% at 57:20; Qwen3 55/67/74% at
+  1:14:39-1:14:46; GRPO's z-score at 1:03:56; reverse KL at 1:12:44; GEPA "more sample
+  efficient" at 1:19:16), and the cited times land on those sentences.
+- Five prompt and schema iterations to stop the right answer standing out by length
+  and to keep the key correct (table in ARCHITECTURE.md §12). Still open: in the last
+  run the right answer was the longest option in 5 of 8 questions, though mostly by
+  only a few characters.
+- In the browser (on a copy of the database): answering, checking (2 of 8 when
+  choosing A everywhere), the highlighted right answer and struck-through wrong pick,
+  timestamps that play the cited moment, a flashcard session with Space and 1/2/3,
+  and the review page at 390 px.
+- The six CS329Z lectures queued in the container were switched, as asked, to the
+  technical profile with the goal "I know about agents and have built few but want
+  to know things I may have missed or I should be aware of" (watch time unchanged),
+  by updating their rows: the running image predates the retarget endpoint.
+
 ### Known gaps / next steps
 - The Anthropic provider is covered by unit tests with a mocked client only.
   No API key was available, so it has not been run against the live API yet.
@@ -339,4 +369,8 @@ Checked against the real machine, with a scratch database on port 8471:
 - Overnight queue, possible next steps: also write notes for queued videos, and
   pause between videos when someone starts using the GPU mid-run (today a running
   analysis finishes).
-- Phase 3, still to build: quizzes and flashcards, saved custom playlists.
+- Phase 3, still to build: saved custom playlists.
+- Quizzes: the right answer is still too often the longest option. Options: a
+  code-side retry for questions with a clear gap, or asking for the options in a
+  fixed length band from the start.
+- Overnight queue: could also write notes and a quiz for each queued video.

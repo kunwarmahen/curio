@@ -113,3 +113,55 @@ class EmbeddingRow(Base):
     blocks_key: Mapped[str] = mapped_column(String(64))
     vectors: Mapped[list] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class SettingRow(Base):
+    """Small app-wide values chosen in the UI, such as the default learning goal."""
+
+    __tablename__ = "settings"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[dict] = mapped_column(JSON)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
+class StudySetRow(Base):
+    """A quiz and flashcards for one analysis and scope."""
+
+    __tablename__ = "study_sets"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    analysis_id: Mapped[str] = mapped_column(ForeignKey("analyses.id", ondelete="CASCADE"), index=True)
+    scope: Mapped[str] = mapped_column(String(16))
+    scope_key: Mapped[str] = mapped_column(Text, index=True)
+    segment_ids: Mapped[list] = mapped_column(JSON, default=list)
+    llm_key: Mapped[str] = mapped_column(String(200), default="")
+    status: Mapped[str] = mapped_column(String(16), index=True)
+    progress: Mapped[str] = mapped_column(Text, default="")
+    error: Mapped[str] = mapped_column(Text, default="")
+    study_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
+class QuizAttemptRow(Base):
+    __tablename__ = "quiz_attempts"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    study_id: Mapped[str] = mapped_column(ForeignKey("study_sets.id", ondelete="CASCADE"), index=True)
+    attempt_json: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class CardStateRow(Base):
+    """Spaced-repetition state of one flashcard. No row = a new card."""
+
+    __tablename__ = "card_states"
+
+    study_id: Mapped[str] = mapped_column(ForeignKey("study_sets.id", ondelete="CASCADE"), primary_key=True)
+    card_id: Mapped[str] = mapped_column(String(16), primary_key=True)
+    box: Mapped[int] = mapped_column(Integer, default=0)
+    due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    reviews: Mapped[int] = mapped_column(Integer, default=0)
+    lapses: Mapped[int] = mapped_column(Integer, default=0)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)

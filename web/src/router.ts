@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
 
-// Two routes don't justify a router dependency: "/" and "/v/<analysis id>".
-export type Route = { name: 'home' } | { name: 'video'; id: string }
+// Three routes don't justify a router dependency: "/", "/v/<analysis id>" and "/review".
+export type Route = { name: 'home' } | { name: 'video'; id: string } | { name: 'review' }
 
 function parse(path: string): Route {
+  if (/^\/review\/?$/.test(path)) return { name: 'review' }
   const match = path.match(/^\/v\/([A-Za-z0-9_-]+)\/?$/)
   return match ? { name: 'video', id: match[1] } : { name: 'home' }
 }

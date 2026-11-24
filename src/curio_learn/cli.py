@@ -33,14 +33,24 @@ def print_analysis(a: VideoAnalysis) -> None:
     print(f"\n{a.llm.provider if a.llm else ''} {a.llm.models if a.llm else ''} · {a.elapsed_s}s")
 
 
+def cli_preferences(args, service) -> LearningPreferences:
+    """Flags given on the command line, the rest from the saved default goal."""
+    saved = service.default_preferences()
+    return LearningPreferences(
+        profile=LearningProfile(args.profile) if args.profile else saved.profile,
+        custom_objective=saved.custom_objective if args.objective is None else args.objective,
+        target_minutes=args.minutes if args.minutes is not None else saved.target_minutes,
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="curio")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     an = sub.add_parser("analyze", help="Analyze a YouTube video")
     an.add_argument("url")
-    an.add_argument("--profile", choices=[p.value for p in LearningProfile], default="general")
-    an.add_argument("--objective", default="")
+    an.add_argument("--profile", choices=[p.value for p in LearningProfile], help="Default: your saved goal")
+    an.add_argument("--objective", default=None)
     an.add_argument("--minutes", type=float, default=None)
     an.add_argument("--force", action="store_true", help="Ignore cached analysis")
     an.add_argument("--json", type=Path, help="Write the full analysis JSON here")
@@ -52,14 +62,20 @@ def main(argv: list[str] | None = None) -> int:
     nt.add_argument("--force", action="store_true", help="Write new notes even if saved ones exist")
     nt.add_argument("--out", type=Path, help="Write the Markdown here instead of printing it")
 
+    qz = sub.add_parser("quiz", help="Write a quiz and flashcards for a finished analysis, and print them")
+    qz.add_argument("analysis_id")
+    qz.add_argument("--scope", choices=[s.value for s in NotesScope], default="playlist")
+    qz.add_argument("--segments", default="", help="Comma-separated segment ids (with --scope selected)")
+    qz.add_argument("--force", action="store_true", help="Write a new set even if a saved one exists")
+
     ak = sub.add_parser("ask", help="Ask a question about an analyzed video")
     ak.add_argument("analysis_id")
     ak.add_argument("question")
 
     qu = sub.add_parser("queue", help="Queue a video for the overnight queue, or list the queue")
     qu.add_argument("url", nargs="?", help="Video to queue; without it, list the queue")
-    qu.add_argument("--profile", choices=[p.value for p in LearningProfile], default="general")
-    qu.add_argument("--objective", default="")
+    qu.add_argument("--profile", choices=[p.value for p in LearningProfile], help="Default: your saved goal")
+    qu.add_argument("--objective", default=None)
     qu.add_argument("--minutes", type=float, default=None)
     qu.add_argument("--remove", metavar="ANALYSIS_ID", help="Take a video out of the queue")
 
@@ -75,13 +91,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "analyze":
         from curio_learn.service import CurioService
 
-        prefs = LearningPreferences(
-            profile=LearningProfile(args.profile), custom_objective=args.objective, target_minutes=args.minutes
-        )
+        service = CurioService(settings)
+        prefs = cli_preferences(args, service)
         try:
-            result = CurioService(settings).analyze(
-                args.url, prefs, force=args.force, progress=lambda m: print(f"… {m}", flush=True)
-            )
+            result = service.analyze(args.url, prefs, force=args.force, progress=lambda m: print(f"… {m}", flush=True))
         except CurioError as exc:
             print(f"Error ({exc.code}): {exc.message}", file=sys.stderr)
             return 1
@@ -116,6 +129,38 @@ def main(argv: list[str] | None = None) -> int:
             print(text)
         for w in notes.warnings:
             print(f"Warning: {w}", file=sys.stderr)
+        return 0
+    if args.cmd == "quiz":
+        from curio_learn.service import CurioService
+
+        segments = [x.strip() for x in args.segments.split(",") if x.strip()]
+        try:
+            study = CurioService(settings).study(
+                args.analysis_id,
+                NotesScope(args.scope),
+                segments,
+                force=args.force,
+                progress=lambda m: print(f"… {m}", flush=True),
+            )
+        except KeyError:
+            print(f"Error: no analysis with id {args.analysis_id}", file=sys.stderr)
+            return 1
+        except CurioError as exc:
+            print(f"Error ({exc.code}): {exc.message}", file=sys.stderr)
+            return 1
+        print(f"\nQuiz ({len(study.questions)} questions)\n")
+        for q in study.questions:
+            print(f"{q.id}. {q.question}  [{fmt_ts(q.start_s)}]")
+            for i, o in enumerate(q.options):
+                print(f"   {'*' if i == q.answer else ' '} {chr(65 + i)}. {o}")
+            if q.explanation:
+                print(f"   {q.explanation}")
+        print(f"\nFlashcards ({len(study.cards)})\n")
+        for c in study.cards:
+            print(f"{c.id}. {c.front}\n    {c.back}  [{fmt_ts(c.start_s)}]")
+        for w in study.warnings:
+            print(f"Warning: {w}", file=sys.stderr)
+        print(f"\n{study.elapsed_s}s")
         return 0
     if args.cmd == "ask":
         from curio_learn.service import CurioService
@@ -152,9 +197,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Removed {args.remove} from the queue.")
             return 0
         if args.url:
-            prefs = LearningPreferences(
-                profile=LearningProfile(args.profile), custom_objective=args.objective, target_minutes=args.minutes
-            )
+            prefs = cli_preferences(args, service)
             try:
                 analysis_id, _ = service.submit(args.url, prefs, queue=True)
             except CurioError as exc:

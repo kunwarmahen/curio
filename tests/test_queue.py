@@ -171,3 +171,50 @@ def test_api_queue_flow(service):
         assert client.post(f"/api/v1/queue/{analysis_id}/start").status_code == 400
         assert client.post("/api/v1/queue/nope/start").status_code == 404
         assert client.get("/api/v1/queue").json()["state"] == "empty"
+
+
+def test_default_goal_and_retargeting_the_queue(service):
+    assert service.default_preferences() == LearningPreferences()
+    goal = LearningPreferences(profile="technical", custom_objective="How agents use tools", target_minutes=20)
+    service.set_default_preferences(goal)
+    assert service.default_preferences() == goal
+
+    done = service.analyze(URL, goal)  # this video already has a result with the new goal
+    a, _ = service.submit(URL, LearningPreferences(), queue=True)
+    b, _ = service.submit(URL2, LearningPreferences(), queue=True)
+    result = service.retarget_queued(goal)
+    assert result == {"updated": [b], "already_analyzed": [a]}
+    assert service.get(a) is None and service.get(done.id).status is AnalysisStatus.DONE
+    assert service.get(b).preferences == goal
+    # Queuing the same video with the same goal now finds the retargeted row.
+    assert service.submit(URL2, goal, queue=True) == (b, False)
+    # Only queued videos change.
+    service.run(b)
+    assert service.retarget_queued(LearningPreferences(), [b]) == {"updated": [], "already_analyzed": []}
+    assert service.get(b).preferences == goal
+
+
+def test_cli_uses_the_saved_goal(service):
+    from argparse import Namespace
+
+    from curio_learn.cli import cli_preferences
+
+    service.set_default_preferences(LearningPreferences(profile="beginner", custom_objective="basics"))
+    flags = Namespace(profile=None, objective=None, minutes=None)
+    assert cli_preferences(flags, service) == LearningPreferences(profile="beginner", custom_objective="basics")
+    flags = Namespace(profile="technical", objective="", minutes=15)
+    assert cli_preferences(flags, service) == LearningPreferences(profile="technical", target_minutes=15)
+
+
+def test_api_default_goal(service):
+    with TestClient(create_app(service)) as client:
+        assert client.get("/api/v1/preferences/default").json()["profile"] == "general"
+        goal = {"profile": "executive", "custom_objective": "costs", "target_minutes": None}
+        assert client.put("/api/v1/preferences/default", json={"preferences": goal}).status_code == 200
+        assert client.get("/api/v1/preferences/default").json() == goal
+        queued = client.post("/api/v1/analyses", json={"url": URL, "queue": True}).json()["analysis_id"]
+        other = {"profile": "deep_dive", "custom_objective": "", "target_minutes": 30}
+        r = client.post("/api/v1/queue/preferences", json={"preferences": other}).json()
+        assert r == {"updated": [queued], "already_analyzed": []}
+        assert client.get("/api/v1/queue").json()["items"][0]["preferences"] == other
+        assert client.get("/api/v1/preferences/default").json() == other  # saved as the default too

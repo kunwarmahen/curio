@@ -12,9 +12,12 @@ from sqlalchemy.orm import Session, sessionmaker
 from curio_learn.domain import (
     AnalysisStatus,
     Answer,
+    CardState,
     LearningNotes,
     LearningPreferences,
     NotesScope,
+    QuizAttempt,
+    StudySet,
     Transcript,
     VideoAnalysis,
     VideoMetadata,
@@ -22,10 +25,14 @@ from curio_learn.domain import (
 from curio_learn.storage.orm import (
     AnalysisRow,
     Base,
+    CardStateRow,
     EmbeddingRow,
     NotesRow,
     QuestionRow,
+    QuizAttemptRow,
     SegmentRow,
+    SettingRow,
+    StudySetRow,
     TranscriptRow,
     VideoRow,
 )
@@ -285,6 +292,21 @@ class Repository:
             )
             return result.rowcount == 1
 
+    def set_queued_preferences(self, analysis_id: str, prefs: LearningPreferences) -> bool:
+        """Change the goal of an analysis that is still waiting in the queue."""
+        with self.session() as db, db.begin():
+            row = db.get(AnalysisRow, analysis_id)
+            if row is None or row.status != AnalysisStatus.QUEUED.value:
+                return False
+            row.preferences_key = prefs.cache_key()
+            row.preferences_json = prefs.model_dump(mode="json")
+            return True
+
+    def video_of(self, analysis_id: str) -> str | None:
+        with self.session() as db:
+            row = db.get(AnalysisRow, analysis_id)
+            return row.video_id if row else None
+
     def remove_queued(self, analysis_id: str) -> bool:
         """Delete an analysis that is still waiting in the queue."""
         with self.session() as db, db.begin():
@@ -313,7 +335,12 @@ class Repository:
                     NotesRow.status.in_([AnalysisStatus.PENDING.value, AnalysisStatus.RUNNING.value])
                 )
             ).all()
-            stale = [r for r in [*rows, *notes] if _aware(r.updated_at) < cutoff]
+            study = db.scalars(
+                select(StudySetRow).where(
+                    StudySetRow.status.in_([AnalysisStatus.PENDING.value, AnalysisStatus.RUNNING.value])
+                )
+            ).all()
+            stale = [r for r in [*rows, *notes, *study] if _aware(r.updated_at) < cutoff]
             for row in stale:
                 row.status, row.error = AnalysisStatus.FAILED.value, "Interrupted: the process running it stopped."
             return len(stale)
@@ -445,6 +472,158 @@ class Repository:
                     return row.id
             return None
 
+    # ------------------------------------------------------- quiz and flashcards
+
+    def create_study(
+        self, study_id: str, analysis_id: str, scope: NotesScope, segment_ids: list[str], key: str, llm_key: str
+    ) -> None:
+        with self.session() as db, db.begin():
+            db.add(
+                StudySetRow(
+                    id=study_id,
+                    analysis_id=analysis_id,
+                    scope=scope.value,
+                    scope_key=key,
+                    segment_ids=segment_ids,
+                    llm_key=llm_key,
+                    status=AnalysisStatus.PENDING.value,
+                )
+            )
+
+    def update_study_status(self, study_id: str, status: AnalysisStatus, progress: str = "", error: str = "") -> None:
+        with self.session() as db, db.begin():
+            row = db.get(StudySetRow, study_id)
+            if row:
+                row.status, row.progress, row.error = status.value, progress, error
+
+    def save_study(self, study: StudySet) -> None:
+        with self.session() as db, db.begin():
+            row = db.get(StudySetRow, study.id)
+            if row is None:
+                raise KeyError(study.id)
+            row.status, row.progress, row.error = study.status.value, study.progress, study.error
+            row.study_json = study.model_dump(mode="json")
+
+    @staticmethod
+    def _study_from_row(row: StudySetRow) -> StudySet:
+        if row.study_json:
+            return StudySet.model_validate(row.study_json)
+        return StudySet(
+            id=row.id,
+            analysis_id=row.analysis_id,
+            video_id="",
+            scope=NotesScope(row.scope),
+            segment_ids=row.segment_ids or [],
+            status=AnalysisStatus(row.status),
+            progress=row.progress,
+            error=row.error,
+            created_at=_aware(row.created_at),
+        )
+
+    def get_study(self, study_id: str) -> StudySet | None:
+        with self.session() as db:
+            row = db.get(StudySetRow, study_id)
+            return self._study_from_row(row) if row else None
+
+    def list_study(self, analysis_id: str) -> list[StudySet]:
+        """Study sets for an analysis, newest first."""
+        with self.session() as db:
+            rows = db.scalars(
+                select(StudySetRow)
+                .where(StudySetRow.analysis_id == analysis_id)
+                .order_by(StudySetRow.created_at.desc())
+            )
+            return [self._study_from_row(r) for r in rows]
+
+    def find_study(
+        self, analysis_id: str, key: str, llm_key: str, *, stale_after: timedelta = STALE_AFTER
+    ) -> str | None:
+        """Id of a finished or live study set with identical inputs."""
+        cutoff = datetime.now(UTC) - stale_after
+        with self.session() as db:
+            rows = db.scalars(
+                select(StudySetRow)
+                .where(
+                    StudySetRow.analysis_id == analysis_id,
+                    StudySetRow.scope_key == key,
+                    StudySetRow.llm_key == llm_key,
+                    StudySetRow.status != AnalysisStatus.FAILED.value,
+                )
+                .order_by(StudySetRow.created_at.desc())
+            )
+            for row in rows:
+                if row.status == AnalysisStatus.DONE.value or _aware(row.updated_at) >= cutoff:
+                    return row.id
+            return None
+
+    def decks(self) -> list[tuple[StudySet, VideoMetadata]]:
+        """The newest finished study set of each analysis (its cards are the ones
+        reviewed; writing a new set replaces the older one's cards), newest first."""
+        with self.session() as db:
+            stmt = (
+                select(StudySetRow, VideoRow)
+                .join(AnalysisRow, AnalysisRow.id == StudySetRow.analysis_id)
+                .join(VideoRow, VideoRow.video_id == AnalysisRow.video_id)
+                .where(StudySetRow.status == AnalysisStatus.DONE.value)
+                .order_by(StudySetRow.created_at.desc())
+            )
+            out, seen = [], set()
+            for row, video in db.execute(stmt):
+                if row.analysis_id in seen:
+                    continue
+                seen.add(row.analysis_id)
+                out.append((self._study_from_row(row), VideoMetadata.model_validate(video.metadata_json)))
+            return out
+
+    def save_attempt(self, attempt: QuizAttempt) -> None:
+        with self.session() as db, db.begin():
+            db.add(
+                QuizAttemptRow(
+                    id=attempt.id,
+                    study_id=attempt.study_id,
+                    attempt_json=attempt.model_dump(mode="json"),
+                    created_at=attempt.created_at,
+                )
+            )
+
+    def list_attempts(self, study_id: str) -> list[QuizAttempt]:
+        """Quiz attempts, newest first."""
+        with self.session() as db:
+            rows = db.scalars(
+                select(QuizAttemptRow)
+                .where(QuizAttemptRow.study_id == study_id)
+                .order_by(QuizAttemptRow.created_at.desc())
+            )
+            return [QuizAttempt.model_validate(r.attempt_json) for r in rows]
+
+    def card_states(self, study_ids: list[str]) -> dict[tuple[str, str], CardState]:
+        with self.session() as db:
+            rows = db.scalars(select(CardStateRow).where(CardStateRow.study_id.in_(study_ids)))
+            return {
+                (r.study_id, r.card_id): CardState(
+                    study_id=r.study_id,
+                    card_id=r.card_id,
+                    box=r.box,
+                    due_at=_aware(r.due_at) if r.due_at else None,
+                    reviews=r.reviews,
+                    lapses=r.lapses,
+                )
+                for r in rows
+            }
+
+    def save_card_state(self, state: CardState) -> None:
+        with self.session() as db, db.begin():
+            db.merge(
+                CardStateRow(
+                    study_id=state.study_id,
+                    card_id=state.card_id,
+                    box=state.box,
+                    due_at=state.due_at,
+                    reviews=state.reviews,
+                    lapses=state.lapses,
+                )
+            )
+
     # --------------------------------------------------------------- questions
 
     def save_answer(self, answer: Answer) -> None:
@@ -470,6 +649,17 @@ class Repository:
     def clear_answers(self, analysis_id: str) -> int:
         with self.session() as db, db.begin():
             return db.execute(delete(QuestionRow).where(QuestionRow.analysis_id == analysis_id)).rowcount
+
+    # ---------------------------------------------------------------- settings
+
+    def get_setting(self, key: str) -> dict | None:
+        with self.session() as db:
+            row = db.get(SettingRow, key)
+            return row.value if row else None
+
+    def set_setting(self, key: str, value: dict) -> None:
+        with self.session() as db, db.begin():
+            db.merge(SettingRow(key=key, value=value))
 
     # -------------------------------------------------------------- embeddings
 

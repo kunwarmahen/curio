@@ -363,3 +363,88 @@ class Answer(BaseModel):
     llm: LLMInfo | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     elapsed_s: float = 0.0
+
+
+# ------------------------------------------------------------ quiz and flashcards
+
+
+class QuizQuestion(BaseModel):
+    """A multiple-choice question answered in the video at `start_s` (a real cue time)."""
+
+    id: str  # q1, q2, … in video order
+    question: str
+    options: list[str]
+    answer: int  # index into options
+    explanation: str = ""
+    section_id: str
+    start_s: float
+
+
+class Flashcard(BaseModel):
+    id: str  # c1, c2, … in video order
+    front: str
+    back: str
+    section_id: str
+    start_s: float
+
+
+class StudySet(BaseModel):
+    """A quiz and a deck of flashcards for one analysis and scope (as for notes)."""
+
+    id: str
+    analysis_id: str
+    video_id: str
+    scope: NotesScope
+    segment_ids: list[str] = Field(default_factory=list)
+    status: AnalysisStatus = AnalysisStatus.PENDING
+    progress: str = ""
+    error: str = ""
+    questions: list[QuizQuestion] = Field(default_factory=list)
+    cards: list[Flashcard] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    llm: LLMInfo | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    elapsed_s: float = 0.0
+
+
+class QuizAttempt(BaseModel):
+    id: str
+    study_id: str
+    answers: dict[str, int]  # question id -> chosen option index
+    correct: list[str]  # ids of the questions answered correctly
+    score: int
+    total: int
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class CardGrade(StrEnum):
+    AGAIN = "again"  # forgot: see it again in a few minutes
+    GOOD = "good"  # remembered: next box
+    EASY = "easy"  # remembered easily: skip a box
+
+
+class CardState(BaseModel):
+    """Spaced-repetition state of one flashcard (Leitner boxes; box 0 = new)."""
+
+    study_id: str
+    card_id: str
+    box: int = 0
+    due_at: datetime | None = None  # None = new, due now
+    reviews: int = 0
+    lapses: int = 0
+
+
+class DueCard(BaseModel):
+    card: Flashcard
+    state: CardState
+    study_id: str
+    analysis_id: str
+    video_title: str
+    video_url: str
+
+
+class FlashcardDeck(BaseModel):
+    cards: list[DueCard]  # due now, most overdue first, then new cards
+    due: int  # cards due now (including new ones)
+    total: int  # cards in the deck
+    next_due_at: datetime | None = None  # when the next card not due now comes due
