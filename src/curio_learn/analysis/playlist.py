@@ -65,18 +65,39 @@ def select_sections(
     knapsack), then the direct prerequisites of its sections that still fit. Before
     this, sections went in by score, and one long top section could crowd out several
     nearly as good (MIT 6.006 lecture 1: a 10-minute proof scored 100 left out
-    efficiency and complexity classes, 87 and 93, from a 14-minute playlist). With
-    `excludes` (courses) the greedy selection is used."""
-    if not excludes:
-        return _knapsack(scored, budget_s, config)
-    return _greedy(scored, budget_s, config, excludes=excludes)
+    efficiency and complexity classes, 87 and 93, from a 14-minute playlist).
+
+    With `excludes` (a course's repeats), when the best set holds both halves of a
+    repeat, the half worth less is set aside and the set is chosen again, until no
+    repeat is left; a course has few repeats, so this ends after a few rounds."""
+    excludes = excludes or {}
+    banned: set[str] = set()
+    by_id = {s.section.id: s for s in scored}
+    while True:
+        chosen = _knapsack(scored, budget_s, config, banned=banned, excludes=excludes)
+        clashes = [(a, b) for a in sorted(chosen) for b in sorted(excludes.get(a, ())) if b in chosen and a < b]
+        if not clashes:
+            return chosen
+        for a, b in clashes:
+            if a not in banned and b not in banned:
+                banned.add(a if _pick_value(by_id[a]) < _pick_value(by_id[b]) else b)
 
 
-def _knapsack(scored: list[ScoredSection], budget_s: float, config: PlaylistConfig) -> set[str]:
-    unit = 5.0  # seconds per step: fine enough for any budget, small tables
-    items = [s for s in scored if s.importance != Importance.SKIP]
+def _knapsack(
+    scored: list[ScoredSection],
+    budget_s: float,
+    config: PlaylistConfig,
+    *,
+    banned: set[str] | None = None,
+    excludes: dict[str, set[str]] | None = None,
+) -> set[str]:
+    banned, excludes = banned or set(), excludes or {}
+    items = [s for s in scored if s.importance != Importance.SKIP and s.section.id not in banned]
     if not items:
         return set()
+    limit = budget_s * config.budget_tolerance
+    # 5 s steps, or coarser for a long course playlist (at most ~1,500 steps).
+    unit = max(5.0, limit / 1500)
     lead = config.lead_in_s + config.tail_s
     cost = [math.ceil((s.section.duration_s + lead) / unit) for s in items]
     # A section that better sections build on is worth a little more (10% per such
@@ -88,7 +109,6 @@ def _knapsack(scored: list[ScoredSection], budget_s: float, config: PlaylistConf
             if p in score_of and s.score.final > score_of[p]:
                 dependants[p] = dependants.get(p, 0) + 1
     value = [_pick_value(s) * (1 + 0.1 * min(2, dependants.get(s.section.id, 0))) for s in items]
-    limit = budget_s * config.budget_tolerance
     cap = int(limit // unit)
     best = [0.0] * (cap + 1)
     take = [[False] * (cap + 1) for _ in items]
@@ -112,69 +132,13 @@ def _knapsack(scored: list[ScoredSection], budget_s: float, config: PlaylistConf
     for sid in sorted(chosen, key=lambda x: -by_id[x].score.final):
         for p in by_id[sid].evaluation.builds_on:
             pre = by_id.get(p)
-            if pre is None or p in chosen or _RANK[pre.importance] < _RANK[Importance.RECOMMENDED]:
+            if pre is None or p in chosen or p in banned or _RANK[pre.importance] < _RANK[Importance.RECOMMENDED]:
                 continue
+            if any(p in excludes.get(x, ()) or x in excludes.get(p, ()) for x in chosen):
+                continue  # a prerequisite that repeats a chosen section
             if used + pre.section.duration_s + lead <= limit:
                 chosen.add(p)
                 used += pre.section.duration_s + lead
-    return chosen
-
-
-def _greedy(
-    scored: list[ScoredSection],
-    budget_s: float,
-    config: PlaylistConfig,
-    *,
-    excludes: dict[str, set[str]] | None = None,
-) -> set[str]:
-    """Sections by tier and score, each with its prerequisites when the bundle fits."""
-    by_id = {s.section.id: s for s in scored}
-    limit = budget_s * config.budget_tolerance
-    chosen: set[str] = set()
-    blocked: set[str] = set()
-    excludes = excludes or {}
-    used = 0.0
-
-    def cost(sid: str) -> float:
-        # Each segment gets a lead-in and a tail; counting them per section keeps the
-        # finished playlist inside the budget (merged neighbours only make it shorter).
-        return by_id[sid].section.duration_s + config.lead_in_s + config.tail_s
-
-    def try_add(sid: str) -> None:
-        nonlocal used
-        s = by_id[sid]
-        if sid in chosen or sid in blocked or s.importance == Importance.SKIP:
-            return
-        if used + cost(sid) > limit:
-            return
-        # Pull in the sections this one directly builds on, but only when the whole
-        # bundle fits: prerequisites must never crowd out the section that needs them.
-        prereqs = [
-            p
-            for p in s.evaluation.builds_on
-            if p in by_id
-            and p not in chosen
-            and p not in blocked
-            and _RANK[by_id[p].importance] >= _RANK[Importance.RECOMMENDED]
-        ]
-        bundle = [sid, *prereqs]
-        if used + sum(cost(x) for x in bundle) > limit:
-            bundle = [sid]  # prerequisites stay listed on the segment card instead
-        if any(y in bundle for x in bundle for y in excludes.get(x, ())):
-            bundle = [sid]  # a prerequisite that repeats the section itself
-        for x in bundle:
-            chosen.add(x)
-            used += cost(x)
-            blocked.update(excludes.get(x, ()))
-
-    ranked = sorted(scored, key=lambda s: (_RANK[s.importance], s.score.final), reverse=True)
-    for s in ranked:
-        if s.importance != Importance.SKIP:
-            try_add(s.section.id)
-    if not chosen:  # nothing fits: take the single best section anyway
-        best = next((s for s in ranked if s.importance != Importance.SKIP), None)
-        if best:
-            chosen.add(best.section.id)
     return chosen
 
 

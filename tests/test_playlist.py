@@ -214,3 +214,21 @@ def test_one_long_section_does_not_crowd_out_several_nearly_as_good():
     weak = scored(1, 60, dur=300)
     chosen = select_sections([proof, weak, scored(2, 62, dur=360)], budget_s=14 * 60, config=CFG)
     assert "S00" in chosen
+
+
+def test_course_selection_keeps_one_half_of_each_repeat_and_refills_the_time():
+    # S00 and S01 teach the same thing (S01 slightly better); S02, S03 are unrelated.
+    secs = [scored(0, 90), scored(1, 92), scored(2, 70), scored(3, 60)]
+    excludes = {"S00": {"S01"}, "S01": {"S00"}}
+    chosen = select_sections(secs, budget_s=400, config=CFG, excludes=excludes)  # room for three
+    assert "S01" in chosen and "S00" not in chosen  # the better half
+    assert chosen == {"S01", "S02", "S03"}  # the freed time went to the next best
+
+
+def test_course_selection_handles_chains_of_repeats_and_prerequisites():
+    # S00 repeats S01 and S02; S03 builds on S00.
+    secs = [scored(0, 80), scored(1, 85), scored(2, 75), scored(3, 95, builds_on=["S00"])]
+    excludes = {"S00": {"S01", "S02"}, "S01": {"S00"}, "S02": {"S00"}}
+    chosen = select_sections(secs, budget_s=600, config=CFG, excludes=excludes)
+    assert not any(b in chosen for a in chosen for b in excludes.get(a, ()))
+    assert {"S01", "S03"} <= chosen

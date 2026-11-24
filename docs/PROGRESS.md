@@ -602,6 +602,25 @@ three beginner analyses (other goals unchanged):
 - MIT 6.006 and 3Blue1Brown: same picks; foundations score 2–10 higher.
 - 2 new tests (175 in total).
 
+### Course playlists use the knapsack (2026-11-24)
+Course playlists now use the same selection as video playlists, with repeats: if the
+best set holds both halves of a repeat, the half worth less is set aside and the set is
+chosen again. The greedy selector is gone. Offline on the CS329Z course (10 lectures,
+189 sections, 2 repeat pairs, from the saved plan's verdicts; no model calls):
+
+| Length | Greedy | Knapsack |
+|---|---|---|
+| 90 min | 29 sections, 97 min | 38 sections, 96 min |
+| 180 min | 55 sections, 195 min | 64 sections, 194 min |
+
+No repeat has both halves in either; 0.01–0.02 s. At 90 minutes it adds privacy and
+collusion, observation masking, MCP tool discovery, memory maintenance and
+MemoryArena, handoffs vs. agent-as-tool, and choosing context vs. weight optimization;
+it drops longer sections, including the course's top-scored one (DSPy optimizers with
+GEPA, 100, 9.3 min), bi-encoders vs. cross-encoders (95, 6 min) and agent anatomy.
+Parts get shorter (about 2.5 instead of 3.3 minutes). The CS329Z playlist changes the
+next time it's built. 2 new tests (177 in total).
+
 ### Known gaps / next steps
 - The Anthropic provider has not been run against the live API (no credentials
   here); `curio check-claude` checks it with one tiny request.
@@ -609,8 +628,9 @@ three beginner analyses (other goals unchanged):
   tie at 100 and the bonus can't separate them (Kubernetes).
 - With the learner's own goal, sections the goal asks for can be marked down along with
   what they know (Lecture 1's debugging framework).
-- Course playlists still select greedily (they need repeat exclusions), so a long
-  section can crowd out shorter ones there.
+- The knapsack values a section by √minutes, so a long top section loses to several
+  shorter very good ones (CS329Z's 9.3-minute DSPy optimizers section, scored 100).
+  That's the intent, but whether √ is the right curve hasn't been tested with a learner.
 - The lexical redundancy threshold (0.45) wasn't examined in this calibration.
 - Repeat vs overlap verdicts vary run to run.
 - The made-up-names check covers names, not plain-word claims or numbers.
