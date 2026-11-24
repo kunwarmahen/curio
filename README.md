@@ -126,8 +126,8 @@ desktop's brief spikes don't count) and no Ollama model loaded by another progra
 Before each video it checks again, so if you start using the GPU at night the queue
 waits; a video being analyzed checks again about once a minute and, if something else
 is using the GPU, pauses and goes back into the queue. When it runs again it picks up
-after the last step it finished (outline, boundaries, ad check, evaluations), so a
-pause costs at most the step it was in. After each video it also writes the
+after the last step it finished (outline, boundaries, ad check, and each batch of
+evaluations), so a pause loses little work. After each video it also writes the
 notes and a quiz with flashcards for its playlist, so they're ready in the morning
 (`CURIO_QUEUE_PREPARE=false` turns this off; if the GPU gets busy, they're skipped
 and you can write them from the video's page). The Queue page (in the menu) lists the

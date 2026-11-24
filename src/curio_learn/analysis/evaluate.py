@@ -103,11 +103,18 @@ def evaluate_sections(
     batch_tokens: int,
     retries: int = 2,
     progress: Callable[[str], None] = lambda _: None,
+    done: dict[str, SectionEvaluation] | None = None,
+    on_batch: Callable[[dict[str, SectionEvaluation]], None] = lambda _: None,
 ) -> tuple[dict[str, SectionEvaluation], list[str]]:
-    """Evaluate all sections. Returns evaluations by section id and warnings."""
+    """Evaluate all sections. Returns evaluations by section id and warnings.
+
+    `done` holds evaluations from an interrupted earlier run: a batch with any of its
+    sections there is not asked again (sections the model skipped in it are asked in
+    the pass for skipped sections, as usual). `on_batch` gets every evaluation so far
+    after each batch, so a caller can save them."""
     shared = prompts.evaluate_shared_prefix(title=title, brief=brief, outline=render_outline(sections))
     valid_ids = {s.id for s in sections}
-    results: dict[str, SectionEvaluation] = {}
+    results: dict[str, SectionEvaluation] = {k: v for k, v in (done or {}).items() if k in valid_ids}
     warnings: list[str] = []
     batches = _batches(sections, blocks, batch_tokens)
 
@@ -134,8 +141,12 @@ def evaluate_sections(
                 results[converted.section_id] = converted
 
     for n, batch in enumerate(batches, 1):
+        if any(s.id in results for s in batch):
+            continue  # evaluated before a pause
         progress(f"Evaluating sections {batch[0].id}–{batch[-1].id} (batch {n} of {len(batches)})")
         run(batch, f"evaluate[{n}]")
+        if n < len(batches):
+            on_batch(dict(results))
 
     missing = [s for s in sections if s.id not in results]
     if missing:

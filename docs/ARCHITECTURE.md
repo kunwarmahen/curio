@@ -392,14 +392,16 @@ progress, and picks up where it stopped when the GPU is free.
 evaluations) the pipeline saves the state so far to `analysis_checkpoints` (one row per
 analysis: the step, the sections, repairs and warnings, the outline's overview and
 concepts, the evaluations, and the seconds spent). A run that finds a checkpoint skips
-the steps it covers, so a pause costs at most the step it interrupted. A checkpoint is
+the steps it covers, so a pause costs at most the step (or evaluation batch) it interrupted. A checkpoint is
 used only when its key matches: the pipeline version, provider and models, a hash of the
 transcript blocks, and the boundary and ad switches. The evaluations also need the same
 learning goal, since a queued video's goal can change while it waits; with a new goal
 the outline and boundaries are kept and only the evaluations are redone. The checkpoint
-is deleted when the analysis finishes or fails, or when it's taken out of the queue. A
-pause inside a step (between outline windows or evaluation batches) still redoes that
-step.
+is deleted when the analysis finishes or fails, or when it's taken out of the queue.
+Within the evaluations, each finished batch is saved too (`partial_evaluations`, with the
+goal it was written for), and a resumed run asks only the batches not done; batches
+are the same on both runs because the sections and batch size are. A pause inside the
+outline (between transcript windows) or the boundary step still redoes that step.
 The worker remembers the last reason it waited, which `GET /queue` reports.
 
 **Preparing study material.** With `CURIO_QUEUE_PREPARE` (default on), the queued job

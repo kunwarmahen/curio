@@ -81,10 +81,31 @@ class _Resume:
         }
         if step == "evaluate":
             self.data["before_evaluate"] = before
+            self.data.pop("partial_evaluations", None)
+        self._write(step)
+
+    def partial(self) -> dict[str, SectionEvaluation]:
+        """Evaluation batches finished before a pause, for the same goal."""
+        d = self.data
+        if d.get("partial_prefs") != self.prefs_key:
+            return {}
+        return {k: SectionEvaluation.model_validate(v) for k, v in d.get("partial_evaluations", {}).items()}
+
+    def save_partial(self, elapsed_s: float, evaluations: dict[str, SectionEvaluation]) -> None:
+        """Save the evaluations so far (after each batch), keeping the finished step."""
+        self.data = {
+            **self.data,
+            "partial_evaluations": {k: v.model_dump(mode="json") for k, v in evaluations.items()},
+            "partial_prefs": self.prefs_key,
+            "elapsed_s": round(self.elapsed_before + elapsed_s, 1),
+        }
+        self._write("evaluation batch")
+
+    def _write(self, what: str) -> None:
         try:
             self._save(self.data)
         except Exception:  # a lost checkpoint only costs time on the next run
-            log.exception("Could not save the %s checkpoint", step)
+            log.exception("Could not save the %s checkpoint", what)
 
 
 class AnalysisPipeline:
@@ -219,6 +240,9 @@ class AnalysisPipeline:
             evaluations = {k: SectionEvaluation.model_validate(v) for k, v in d["evaluations"].items()}
             warnings += d["eval_warnings"]
         else:
+            done = resume.partial()
+            if done:
+                progress(f"Resuming: kept the evaluations of {len(done)} section(s)")
             evaluations, eval_warnings = evaluate_sections(
                 self.provider,
                 model=models["evaluate"],
@@ -229,6 +253,8 @@ class AnalysisPipeline:
                 batch_tokens=self._batch_tokens(),
                 retries=s.llm_max_retries,
                 progress=progress,
+                done=done,
+                on_batch=lambda evs: resume.save_partial(elapsed(), evs),
             )
             resume.save(
                 "evaluate",

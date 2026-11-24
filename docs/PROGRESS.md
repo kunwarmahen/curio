@@ -481,12 +481,20 @@ general goal, so flagged), on a copy of the database:
   section added by hand was drawn hatched like a left-out repeat; now drawn as optional.
 - 8 new tests (164 in total).
 
+### Evaluation batches saved on pause (2026-11-24)
+- Each finished evaluation batch goes into the checkpoint; a resumed run asks only the
+  batches not done (with the same goal; a new goal redoes them all). Real run on a copy
+  (Lecture 1, technical goal): paused at 165 s, after batch 1 of 2 (19 sections);
+  the resumed run evaluated only batch 2, in 24 s (189 s of work in all, 25 sections,
+  no warnings). The same pause before this change redid batch 1 (67 s).
+- 1 new test (165 in total).
+
 ### Known gaps / next steps
 - The Anthropic provider has not been run against the live API (no credentials
   here); `curio check-claude` checks it with one tiny request.
 - Calibrate the scoring thresholds and the redundancy threshold on more videos
   (lectures, podcasts, tutorials with auto-captions).
-- A pause inside a step redoes that step; saving each evaluation batch would keep more
-  (the evaluations were 80 of 185 s on Lecture 1).
+- A pause inside the outline step (several transcript windows on long videos) still
+  redoes the outline.
 - Repeat vs overlap verdicts vary run to run.
 - The made-up-names check covers names, not plain-word claims or numbers.

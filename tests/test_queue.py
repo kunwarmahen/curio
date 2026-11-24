@@ -346,3 +346,40 @@ def test_removing_a_paused_video_drops_its_checkpoint(service):
     assert service.repo.get_checkpoint(analysis_id) is not None
     assert service.remove_queued(analysis_id)
     assert service.repo.get_checkpoint(analysis_id) is None
+
+
+def test_a_pause_during_the_evaluations_keeps_the_finished_batches(settings):
+    from curio_learn.errors import Paused
+
+    small = settings.model_copy(update={"evaluate_batch_tokens": 150})  # several batches
+    svc = CurioService(small, llm=FakeLLM(), metadata=FakeMetadata(), transcripts=FakeTranscripts())
+    svc.analyze(URL, LearningPreferences(profile="technical"))
+    batches = svc.llm.calls.count("EvaluationOut")
+    assert batches >= 4
+
+    analysis_id, _ = svc.submit(URL, LearningPreferences(), queue=True)
+    svc.llm.calls.clear()
+    with pytest.raises(Paused):
+        svc.run(analysis_id, should_pause=lambda: "busy" if svc.llm.calls.count("EvaluationOut") == 2 else "")
+    cp = svc.repo.get_checkpoint(analysis_id)
+    assert cp["step"] != "evaluate" and len(cp["partial_evaluations"]) >= 2
+
+    svc.llm.calls.clear()
+    seen: list[str] = []
+    resumed = svc.run(analysis_id, progress=seen.append)
+    assert svc.llm.calls == ["EvaluationOut"] * (batches - 2)
+    assert any("kept the evaluations" in m for m in seen)
+    again = svc.analyze(URL, LearningPreferences(), force=True)
+    assert [s.model_dump() for s in resumed.sections] == [s.model_dump() for s in again.sections]
+    assert resumed.playlist.model_dump() == again.playlist.model_dump()
+
+    # Batches written for another goal are not reused.
+    other, _ = svc.submit(URL2, LearningPreferences(), queue=True)
+    with pytest.raises(Paused):
+        svc.llm.calls.clear()
+        svc.run(other, should_pause=lambda: "busy" if svc.llm.calls.count("EvaluationOut") == 2 else "")
+    svc.retarget_queued(LearningPreferences(profile="technical"), [other])
+    seen.clear()
+    svc.run(other, progress=seen.append)
+    assert not any("kept the evaluations" in m for m in seen)
+    assert svc.repo.get_checkpoint(other) is None
