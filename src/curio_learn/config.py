@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     llm_model_notes: str = ""
     llm_model_ask: str = ""
     llm_model_study: str = ""
+    llm_model_course: str = ""
     llm_max_retries: int = 2
     llm_temperature: float = 0.2
 
@@ -80,6 +81,9 @@ class Settings(BaseSettings):
     queue_gpu_busy_percent: float = 20.0
     # How often the API server checks the queue, in seconds. 0 turns the queue worker off.
     queue_check_s: float = 60.0
+    # After each queued analysis, also write playlist notes and a quiz with flashcards,
+    # so they're ready in the morning (skipped if someone starts using the GPU).
+    queue_prepare: bool = True
 
     # --- Transcripts -----------------------------------------------------------
     transcript_languages: str = "en,en-US,en-GB"
@@ -117,6 +121,7 @@ class Settings(BaseSettings):
             "notes": self.llm_model_notes,
             "ask": self.llm_model_ask,
             "study": self.llm_model_study,
+            "course": self.llm_model_course,
         }.get(task, "")
         if override:
             return override

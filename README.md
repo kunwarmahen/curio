@@ -22,7 +22,10 @@ takeaways and recommendations, each linked to the moment it's said). From Phase 
 timestamps, keeping anything that isn't from the video apart. An **overnight
 queue** lets you add videos at any time and have them analyzed at night, when the
 GPU is free. **Quizzes and flashcards** (with spaced repetition) test what a video
-teaches. See
+teaches. From Phase 4, **courses**: paste a YouTube playlist and Curio queues its
+lectures and builds one playlist from the best parts of all of them, leaving out
+what one lecture teaches again from another, with a checklist of what's easy to miss
+for your goal. See
 [docs/PROGRESS.md](docs/PROGRESS.md) for details and
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design.
 
@@ -56,6 +59,8 @@ uv run curio ask <analysis id> "Where does the speaker explain GRPO?"
 uv run curio quiz <analysis id> --scope video     # write and print a quiz and flashcards
 uv run curio queue "<youtube url>" --profile technical   # analyze tonight (curio api runs the queue)
 uv run curio queue                                       # list the queue; --remove <id> takes one out
+uv run curio course "<youtube playlist url>"             # add a course: queue its lectures for tonight
+uv run curio course <course id> --build --minutes 120    # build and print the course playlist
 ```
 
 `curio api` listens on all interfaces, so phones and other computers on your
@@ -109,9 +114,24 @@ oldest first, between 1 AM and 7 AM local time (`CURIO_QUEUE_HOURS`), and only w
 the GPU is idle: under 20% utilization (the median of five nvidia-smi readings, so a
 desktop's brief spikes don't count) and no Ollama model loaded by another program.
 Before each video it checks again, so if you start using the GPU at night the queue
-waits; a video already running finishes. The home page lists the queue with what
+waits; a video already running finishes. After each video it also writes the
+notes and a quiz with flashcards for its playlist, so they're ready in the morning
+(`CURIO_QUEUE_PREPARE=false` turns this off; if the GPU gets busy, they're skipped
+and you can write them from the video's page). The home page lists the queue with what
 it's waiting for, and each queued video can be started now or removed. Queuing a
 video that is already analyzed opens the existing result.
+
+**Courses.** Paste a playlist link (`youtube.com/playlist?list=…`) into the box on
+the home page, or use "Add the whole playlist as a course" on a video link that names
+a playlist. Curio lists the lectures without downloading anything (newest-first
+playlists are put in lecture order by the numbers in the titles), checks each one's
+captions and queues the ones not analyzed yet with your goal. Videos you've already
+analyzed can also be grouped into a course by hand. On the course page, **Build the
+course playlist** picks the best parts across all analyzed lectures for one time
+budget (about 15 minutes a lecture by default), skips parts another lecture already
+teaches, and plays them in lecture order in one player. Its **Easy to miss** list
+gives 8–12 points from the course for your goal, each linked to the lecture moment
+that teaches it. Build it again when more lectures are analyzed; the page says when.
 
 `curio analyze` prints the playlist and, with `--json out.json`, writes the full
 analysis. Results are cached in `data/curio.db`. Pass `--force` to re-analyze.
@@ -184,11 +204,12 @@ most important ones:
 | Variable | Default | Meaning |
 |---|---|---|
 | `CURIO_LLM_PROVIDER` | `auto` | `auto` uses Anthropic if `ANTHROPIC_API_KEY` is set, otherwise Ollama |
-| `CURIO_LLM_MODEL` | provider default | model for all tasks; `CURIO_LLM_MODEL_OUTLINE` / `_EVALUATE` / `_NOTES` / `_ASK` / `_STUDY` override per task |
+| `CURIO_LLM_MODEL` | provider default | model for all tasks; `CURIO_LLM_MODEL_OUTLINE` / `_EVALUATE` / `_NOTES` / `_ASK` / `_STUDY` / `_COURSE` override per task |
 | `CURIO_ASK_CONTEXT_TOKENS` | `0` (auto) | transcript tokens Ask may show the model; longer transcripts are searched |
 | `CURIO_EMBED_MODEL` | `nomic-embed-text` | Ollama embedding model for searching long transcripts; empty = keyword search only |
 | `CURIO_QUEUE_HOURS` | `1-7` | local hours when queued videos are analyzed (`22:30-6` crosses midnight); empty = any time the GPU is idle |
 | `CURIO_QUEUE_GPU_BUSY_PERCENT` | `20` | GPU utilization at which the queue waits |
+| `CURIO_QUEUE_PREPARE` | `true` | after each queued video, also write its playlist notes and quiz |
 | `CURIO_QUEUE_CHECK_S` | `60` | how often the server checks the queue; `0` turns the queue worker off |
 | `CURIO_OLLAMA_DEFAULT_MODEL` | `qwen3.8-64k` | local model |
 | `CURIO_OLLAMA_NUM_CTX` | `32768` | context size for every Ollama call (fixed, so the model loads once) |
@@ -244,6 +265,13 @@ most important ones:
     sentence that answers it. The model writes the right answer and the wrong options
     in separate fields; code shuffles them. A second call checks every question:
     replaces "wrong" options that are also right and evens out option lengths.
+13. **Course playlist (LLM, on request):** every watchable section of every analyzed
+    lecture. Embedding similarity finds each section's closest section in another
+    lecture; the model judges the closest pairs (repeat, overlap or different, and
+    which to keep) from summaries and transcript excerpts. One selection across the
+    course under one budget: once one half of a repeat is chosen, the other is ruled
+    out. A last call writes the checklist from the course outline; points that cite
+    no real section are dropped.
 
 ## Tests
 
@@ -264,6 +292,12 @@ uv run ruff check src tests
 - The overnight queue runs inside the API server (`curio api` or the container),
   so the server must be running at night. GPU utilization is read from NVIDIA GPUs
   only; on other hardware the queue relies on the hours and Ollama's loaded models.
+- Some videos can't be played on other sites (the owner turned embedding off; one
+  CS329Z lecture is like this). Curio still analyzes them; the player then shows a
+  link that opens that part on YouTube.
+- Course playlists compare lectures by their sections' summaries and transcript
+  excerpts, so a repeat inside a long section can be missed, and a lecture analyzed
+  for another goal is scored for that goal.
 - Picks vary somewhat between runs of the same video (the model's outline and
   ratings aren't deterministic).
 - The coverage estimate is an AI judgment, not an objective measurement.

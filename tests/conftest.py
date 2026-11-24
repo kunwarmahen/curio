@@ -194,6 +194,33 @@ class FakeLLM:
                     "recommendations": [{"text": "Try the method yourself.", "section_ids": [ids[0]]}],
                 }
             )
+        if name == "OverlapOut":
+            import re
+
+            # The first pair is a repeat (keep B), the second an overlap, the rest different.
+            ids = re.findall(r"^### Pair (p\d+)$", user, re.M)
+            relations = ["repeat", "overlap"]
+            verdicts = [
+                {"pair": pid, "relation": relations[i] if i < 2 else "different", "keep": "B", "reason": f"Both {pid}."}
+                for i, pid in enumerate(ids)
+            ]
+            return json.dumps({"verdicts": verdicts})
+        if name == "ChecklistOut":
+            import re
+
+            keys = re.findall(r"^(L\d+\.S\d+) \[", user, re.M)
+            return json.dumps(
+                {
+                    "points": [
+                        {
+                            "text": "Watch out for the first idea.",
+                            "why": "It matters.",
+                            "sections": [keys[-1], keys[0]],
+                        },
+                        {"text": "A point with no real section.", "why": "", "sections": ["L9.S99"]},
+                    ]
+                }
+            )
         if name == "AnswerOut":
             import re
 

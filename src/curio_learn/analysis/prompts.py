@@ -327,3 +327,51 @@ def study_user(*, sections_text: str, ids: list[str]) -> str:
         "Write questions and flashcards for the following sections. Return exactly one entry for "
         f"each of these ids, in order: {', '.join(ids)}.\n\n{sections_text}"
     )
+
+
+# ------------------------------------------------------------------ courses
+
+COURSE_OVERLAP_SYSTEM = """You are Curio, building one playlist for a whole course from the \
+best parts of its lectures. Some lectures teach the same material again: a recap of last \
+week, or the same idea from another angle. You decide, for pairs of sections from \
+different lectures, whether a learner needs both.
+
+Each pair shows two sections (A and B) with their summaries and an excerpt of what is said.
+For each pair give:
+- relation:
+  - "repeat": someone who has watched one would learn little new from the other: the main \
+thing each teaches is the same, at about the same depth, or one is a recap of the other. \
+Sharing one point (a term, a caveat, a mention of the same method) is not a repeat.
+  - "overlap": the same topic, but each teaches something the other doesn't (a different \
+method, more depth, a new example, results). Both are worth watching.
+  - "different": they share words, not content.
+- keep: "A" or "B", the one to watch if only one: the more complete and clearer explanation \
+for this learner. For "overlap" and "different", the one that matters more for the learner.
+- reason: one short sentence. For "repeat", what both teach. For "overlap", what B adds to A.
+
+Judge from the summaries and excerpts only. Return one entry per pair id, in order."""
+
+
+def course_overlap_user(*, pairs: str, ids: list[str]) -> str:
+    return f"{pairs}\n\nReturn a verdict for each pair, in order: {', '.join(ids)}."
+
+
+COURSE_CHECKLIST_SYSTEM = """You are Curio, an expert teacher. A learner is working through a \
+whole course. You receive the course outline: every lecture with its sections, each with an \
+id like L3.S05, a title, a summary and its key concepts.
+
+Write the points from this course that a learner with the given goal is most likely to have \
+missed or must be aware of: pitfalls and failure modes, non-obvious trade-offs, evaluation \
+traps, costs, safety and security risks, and design rules that practitioners get wrong.
+- Write 8 to 12 points. Prefer points that connect lectures and points that matter in \
+practice over definitions.
+- Each point must be taught in the sections you cite, as their summaries describe them. \
+Don't add facts, numbers or advice the outline doesn't support.
+- text: one specific sentence that states the point itself (a claim or a rule), not a topic \
+name. Name the method, failure or trade-off.
+- why: one short sentence on why it matters for this learner's goal.
+- sections: the 1 to 3 section ids (like L3.S05) that teach it, exactly as in the outline."""
+
+
+def course_checklist_user(*, outline: str) -> str:
+    return f"{outline}\n\nWrite the points, each citing the sections that teach it."

@@ -8,8 +8,10 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 
 from curio_learn.analysis.ask import answer_question
+from curio_learn.analysis.course import Lecture, build_course_plan
 from curio_learn.analysis.notes import generate_notes, scope_key, scope_sections, to_markdown
 from curio_learn.analysis.pipeline import AnalysisPipeline
+from curio_learn.analysis.playlist import PlaylistConfig
 from curio_learn.analysis.study import generate_study, is_due, schedule
 from curio_learn.config import Settings, get_settings
 from curio_learn.domain import (
@@ -18,18 +20,28 @@ from curio_learn.domain import (
     Block,
     CardGrade,
     CardState,
+    Course,
+    CourseLecture,
+    CoursePlan,
     DueCard,
     FlashcardDeck,
     LearningNotes,
     LearningPreferences,
+    LectureState,
     NotesScope,
     QuizAttempt,
     StudySet,
     VideoAnalysis,
     VideoMetadata,
 )
-from curio_learn.errors import AnalysisError, CurioError
+from curio_learn.errors import AnalysisError, CurioError, InvalidURL
 from curio_learn.ingestion.metadata import MetadataProvider, YtDlpMetadataProvider
+from curio_learn.ingestion.playlist import (
+    PlaylistProvider,
+    YtDlpPlaylistProvider,
+    extract_playlist_id,
+    lecture_number,
+)
 from curio_learn.ingestion.transcripts import TranscriptProvider, YouTubeCaptionsProvider
 from curio_learn.ingestion.url import extract_video_id
 from curio_learn.llm.base import LLMProvider
@@ -46,6 +58,10 @@ PIPELINE_VERSION = 5
 NOTES_VERSION = 1
 # Bump when quiz and flashcard generation changes should invalidate saved sets.
 STUDY_VERSION = 2
+# Bump when course playlist building changes should invalidate saved plans.
+COURSE_VERSION = 1
+# Course playlist lengths offered, in minutes; the default is about 15 minutes a lecture.
+COURSE_MINUTES = (60, 90, 120, 180, 240, 360)
 
 Progress = Callable[[str], None]
 
@@ -60,6 +76,7 @@ class CurioService:
         metadata: MetadataProvider | None = None,
         transcripts: TranscriptProvider | None = None,
         embedder: Embedder | None = None,
+        playlists: PlaylistProvider | None = None,
     ):
         self.settings = settings or get_settings()
         self.repo = repository or Repository(self.settings.database_url)
@@ -67,6 +84,7 @@ class CurioService:
         self.metadata = metadata or YtDlpMetadataProvider()
         self._transcripts = transcripts
         self._embedder = embedder
+        self.playlists = playlists or YtDlpPlaylistProvider()
 
     @property
     def llm(self) -> LLMProvider:
@@ -312,6 +330,27 @@ class CurioService:
             log.exception("Notes %s failed", notes_id)
             self.repo.update_notes_status(notes_id, AnalysisStatus.FAILED, error=f"Unexpected error: {exc}")
             raise
+
+    def prepare(self, analysis_id: str, *, gpu_busy: Callable[[], str] = lambda: "") -> list[str]:
+        """Write playlist notes and a quiz with flashcards for a finished analysis, as the
+        overnight queue does after each video. Skips what already exists. Before each one
+        asks `gpu_busy` and stops if someone else started using the GPU. Returns what was
+        written ("notes", "quiz")."""
+        steps = (("notes", self.submit_notes, self.run_notes), ("quiz", self.submit_study, self.run_study))
+        written: list[str] = []
+        for name, submit, run in steps:
+            reason = gpu_busy()
+            if reason:
+                log.info("[%s] Not writing the %s overnight: %s", analysis_id, name, reason)
+                break
+            try:
+                item_id, needs_run = submit(analysis_id)
+                if needs_run:
+                    run(item_id)
+                    written.append(name)
+            except Exception:  # the failure is recorded on the notes or quiz row
+                log.warning("[%s] Writing the %s failed", analysis_id, name, exc_info=True)
+        return written
 
     def notes(
         self,
@@ -597,3 +636,260 @@ class CurioService:
 
     def clear_conversation(self, analysis_id: str) -> int:
         return self.repo.clear_answers(analysis_id)
+
+    # ----------------------------------------------------------------- courses
+
+    def import_course(self, url: str, prefs: LearningPreferences) -> str:
+        """Create (or refresh) a course from a YouTube playlist. Lists the lectures only;
+        `queue_course` then checks each one and queues those not analyzed for the goal."""
+        playlist_id = extract_playlist_id(url)
+        if playlist_id is None:
+            raise InvalidURL("Paste a link to a YouTube playlist (it has list= in it).")
+        info = self.playlists.get_playlist(playlist_id)
+        lectures = [e.model_dump() for e in info.entries]
+        course_id = self.repo.find_course(playlist_id, prefs)
+        if course_id:
+            self.repo.update_course(
+                course_id,
+                title=info.title,
+                channel=info.channel,
+                lectures=lectures,
+                unavailable=info.unavailable,
+                importing=True,
+            )
+            return course_id
+        course_id = uuid.uuid4().hex[:12]
+        self.repo.create_course(
+            course_id,
+            title=info.title,
+            channel=info.channel,
+            playlist_id=playlist_id,
+            prefs=prefs,
+            lectures=lectures,
+            unavailable=info.unavailable,
+            importing=True,
+        )
+        return course_id
+
+    def queue_course(self, course_id: str) -> None:
+        """Fetch each lecture's transcript and queue the lectures that aren't analyzed (or
+        waiting) for the course goal, in course order. Slow: one YouTube lookup per new
+        lecture. Records why a lecture couldn't be queued (no captions, for example)."""
+        course = self.repo.get_course(course_id)
+        if course is None:
+            raise KeyError(course_id)
+        try:
+            for lec in course["lectures"]:
+                vid = lec["video_id"]
+                try:
+                    self.submit(f"https://www.youtube.com/watch?v={vid}", course["preferences"], queue=True)
+                    self.repo.set_course_error(course_id, vid, "")
+                except CurioError as exc:
+                    log.info("[course %s] Lecture %s not queued: %s", course_id, vid, exc.message)
+                    self.repo.set_course_error(course_id, vid, exc.message)
+        finally:
+            self.repo.update_course(course_id, importing=False)
+
+    def group_course(self, title: str, analysis_ids: list[str]) -> str:
+        """A course from videos already analyzed, in upload order. Its goal is the one most
+        of them were analyzed with."""
+        analyses = []
+        for aid in dict.fromkeys(analysis_ids):
+            a = self.repo.get_analysis(aid)
+            if a is None or a.status != AnalysisStatus.DONE:
+                raise AnalysisError("Pick videos that have finished analyzing.")
+            if all(x.video.video_id != a.video.video_id for x in analyses):
+                analyses.append(a)
+        if len(analyses) < 2:
+            raise AnalysisError("A course needs at least two videos.")
+        analyses.sort(key=lambda a: (a.video.upload_date or "9", a.created_at))
+        keys = [a.preferences.cache_key() for a in analyses]
+        prefs = next(a.preferences for a in analyses if a.preferences.cache_key() == max(keys, key=keys.count))
+        course_id = uuid.uuid4().hex[:12]
+        self.repo.create_course(
+            course_id,
+            title=title.strip() or analyses[0].video.channel or "My course",
+            channel=analyses[0].video.channel,
+            playlist_id="",
+            prefs=prefs,
+            lectures=[
+                {"video_id": a.video.video_id, "title": a.video.title, "duration_s": a.video.duration_s}
+                for a in analyses
+            ],
+        )
+        return course_id
+
+    def _lectures(self, course: dict) -> list[CourseLecture]:
+        key = course["preferences"].cache_key()
+        rows = self.repo.analyses_for_videos([x["video_id"] for x in course["lectures"]])
+        waiting = (AnalysisStatus.QUEUED, AnalysisStatus.PENDING, AnalysisStatus.RUNNING)
+        numbers = [lecture_number(x["title"]) for x in course["lectures"]]
+        named = [n for n in numbers if n is not None]
+        use_numbers = len(named) == len(set(named))
+        out = []
+        for pos, lec in enumerate(course["lectures"], 1):
+            mine = [r for r in rows if r["video_id"] == lec["video_id"]]
+            done_goal = next(
+                (r for r in mine if r["status"] == AnalysisStatus.DONE and r["preferences_key"] == key), None
+            )
+            done_any = next((r for r in mine if r["status"] == AnalysisStatus.DONE), None)
+            live = next((r for r in mine if r["status"] in waiting and r["preferences_key"] == key), None)
+            failed = next(
+                (r for r in mine if r["status"] == AnalysisStatus.FAILED and r["preferences_key"] == key), None
+            )
+            item = CourseLecture(
+                position=pos,
+                label=f"Lecture {numbers[pos - 1]}" if use_numbers and numbers[pos - 1] is not None else f"#{pos}",
+                video_id=lec["video_id"],
+                title=lec["title"],
+                duration_s=lec.get("duration_s") or 0,
+            )
+            if done_goal:
+                item.state, item.analysis_id = LectureState.READY, done_goal["id"]
+            elif done_any:
+                item.state, item.analysis_id = LectureState.OTHER_GOAL, done_any["id"]
+                item.pending_id = live["id"] if live else None
+            elif live:
+                queued = live["status"] == AnalysisStatus.QUEUED
+                item.state = LectureState.QUEUED if queued else LectureState.ANALYZING
+                item.pending_id = live["id"]
+            elif failed:
+                item.state, item.pending_id, item.error = LectureState.FAILED, failed["id"], failed["error"]
+            else:
+                item.error = course["errors"].get(lec["video_id"], "")
+            out.append(item)
+        return out
+
+    def course(self, course_id: str) -> Course | None:
+        data = self.repo.get_course(course_id)
+        if data is None:
+            return None
+        lectures = self._lectures(data)
+        plan = self.repo.latest_course_plan(course_id)
+        usable = [lec.analysis_id for lec in lectures if lec.analysis_id]
+        stale = plan is not None and plan.status == AnalysisStatus.DONE and plan.analysis_ids != usable
+        return Course(
+            id=data["id"],
+            title=data["title"],
+            channel=data["channel"],
+            playlist_id=data["playlist_id"],
+            preferences=data["preferences"],
+            lectures=lectures,
+            unavailable=data["unavailable"],
+            importing=data["importing"],
+            plan=plan,
+            plan_stale=stale,
+            created_at=data["created_at"],
+        )
+
+    def courses(self) -> list[Course]:
+        return [c for c in (self.course(d["id"]) for d in self.repo.list_courses()) if c is not None]
+
+    def delete_course(self, course_id: str) -> bool:
+        return self.repo.delete_course(course_id)
+
+    def course_llm_key(self) -> str:
+        return f"{self.llm.name}:{self.settings.model_for('course')}:c{COURSE_VERSION}"
+
+    @staticmethod
+    def default_course_minutes(lectures: int) -> int:
+        return min(COURSE_MINUTES, key=lambda m: abs(m - 15 * lectures))
+
+    def submit_course_plan(
+        self, course_id: str, minutes: int | None = None, *, force: bool = False
+    ) -> tuple[str, bool]:
+        """Register a course playlist built from the lectures analyzed so far. Returns
+        (plan_id, needs_run); reuses one with identical inputs unless `force`."""
+        course = self.course(course_id)
+        if course is None:
+            raise KeyError(course_id)
+        ids = [lec.analysis_id for lec in course.lectures if lec.analysis_id]
+        if len(ids) < 2:
+            raise AnalysisError("A course playlist needs at least two analyzed lectures.")
+        minutes = minutes or self.default_course_minutes(len(ids))
+        if not 10 <= minutes <= 1200:
+            raise AnalysisError("Choose between 10 minutes and 20 hours.")
+        key = f"{','.join(ids)}|{minutes}|{self.course_llm_key()}"
+        if not force:
+            existing = self.repo.find_course_plan(course_id, key)
+            if existing:
+                return existing, False
+        plan = CoursePlan(id=uuid.uuid4().hex[:12], course_id=course_id, budget_s=minutes * 60.0, analysis_ids=ids)
+        self.repo.create_course_plan(plan, key)
+        return plan.id, True
+
+    def run_course_plan(self, plan_id: str, progress: Progress = lambda _: None) -> CoursePlan:
+        pending = self.repo.get_course_plan(plan_id)
+        if pending is None:
+            raise KeyError(plan_id)
+
+        def report(msg: str) -> None:
+            log.info("[course plan %s] %s", plan_id, msg)
+            self.repo.update_course_plan_status(plan_id, AnalysisStatus.RUNNING, msg)
+            progress(msg)
+
+        try:
+            report("Loading the lectures")
+            course = self.repo.get_course(pending.course_id)
+            if course is None:
+                raise AnalysisError("The course is no longer stored.")
+            order = {x["video_id"]: n for n, x in enumerate(course["lectures"], 1)}
+            labels = {lec.position: lec.label for lec in self._lectures(course)}
+            lectures = []
+            for aid in pending.analysis_ids:
+                analysis = self.repo.get_analysis(aid)
+                transcript = self.repo.get_transcript(analysis.video.video_id) if analysis else None
+                if analysis is None or transcript is None:
+                    raise AnalysisError("A lecture's analysis or transcript is no longer stored.")
+                pos = order.get(analysis.video.video_id, len(order) + len(lectures) + 1)
+                lectures.append(
+                    Lecture(
+                        position=pos,
+                        analysis=analysis,
+                        units=boundary_units(transcript.cues),
+                        label=labels.get(pos, ""),
+                    )
+                )
+            anthropic = self.llm.name == "anthropic"
+            plan = build_course_plan(
+                self.llm,
+                model=self.settings.model_for("course"),
+                plan_id=plan_id,
+                course_id=pending.course_id,
+                lectures=lectures,
+                prefs=course["preferences"],
+                budget_s=pending.budget_s,
+                config=PlaylistConfig(merge_gap_s=self.settings.merge_gap_s),
+                context_tokens=150000 if anthropic else self.settings.ollama_num_ctx,
+                embedder=self.embedder,
+                retries=self.settings.llm_max_retries,
+                progress=report,
+            )
+            plan.created_at = pending.created_at
+            self.repo.save_course_plan(plan)
+            return plan
+        except CurioError as exc:
+            self.repo.update_course_plan_status(plan_id, AnalysisStatus.FAILED, error=exc.message)
+            raise
+        except Exception as exc:
+            log.exception("Course plan %s failed", plan_id)
+            self.repo.update_course_plan_status(plan_id, AnalysisStatus.FAILED, error=f"Unexpected error: {exc}")
+            raise
+
+    def course_plan(
+        self, course_id: str, minutes: int | None = None, *, force: bool = False, progress: Progress = lambda _: None
+    ) -> CoursePlan:
+        """Synchronous convenience: submit and run (or return the saved plan)."""
+        plan_id, needs_run = self.submit_course_plan(course_id, minutes, force=force)
+        if not needs_run:
+            saved = self.repo.get_course_plan(plan_id)
+            if saved is not None and saved.status == AnalysisStatus.DONE:
+                return saved
+            plan_id, _ = self.submit_course_plan(course_id, minutes, force=True)
+        return self.run_course_plan(plan_id, progress)
+
+    def course_watched(self, course_id: str) -> set[str]:
+        return self.repo.course_watched(course_id)
+
+    def set_course_watched(self, course_id: str, part_key: str, watched: bool) -> None:
+        self.repo.set_course_watched(course_id, part_key, watched)

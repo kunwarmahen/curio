@@ -144,6 +144,7 @@ textarea {
 }
 
 input[type='url'],
+input[type='text'],
 textarea,
 select {
   width: 100%;
@@ -153,6 +154,7 @@ select {
   padding: 0.7rem 0.85rem;
 }
 input[type='url']:focus,
+input[type='text']:focus,
 textarea:focus,
 select:focus {
   border-color: var(--ink);
@@ -592,6 +594,30 @@ button.stretch:hover,
   width: 100%;
   height: 100%;
   border: 0;
+}
+.player__frame {
+  position: relative;
+}
+.player__blocked {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 1rem;
+  padding: 1.5rem;
+  text-align: center;
+  background: var(--ink);
+  color: var(--surface);
+}
+.player__blocked p {
+  margin: 0;
+  max-width: 36ch;
+}
+.player__blocked .button-primary {
+  background: var(--surface);
+  color: var(--ink);
+  text-decoration: none;
 }
 .player__fallback {
   color: var(--surface);
@@ -1523,5 +1549,311 @@ button.stretch:hover,
   }
   .indexcard {
     padding: 1.2rem 1.1rem;
+  }
+}
+
+/* ---------------------------------------------------------------- courses */
+
+.course__plan {
+  margin-top: 2rem;
+}
+.course__plan h2 {
+  font-size: var(--t-h3);
+}
+.course__build {
+  margin-top: 1.5rem;
+  display: grid;
+  gap: 0.4rem;
+}
+.course__build-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: center;
+}
+.course__build-row select {
+  width: auto;
+  min-width: 12rem;
+}
+.notes__start .course__build .button-primary {
+  margin-top: 0;
+}
+.course__stale {
+  margin-bottom: 1.25rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--ink);
+  border-radius: var(--radius);
+  background: var(--hl-tint);
+  max-width: 62ch;
+}
+.course__stale p {
+  margin: 0;
+}
+
+/* The course map: every lecture as one ruled line, its course parts highlighted. */
+.coursemap {
+  display: grid;
+  gap: 0.15rem;
+}
+.coursemap__row {
+  display: grid;
+  grid-template-columns: 6.5rem minmax(0, 1fr);
+  align-items: center;
+  gap: 0.75rem;
+}
+.coursemap__label {
+  font-size: var(--t-small);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.coursemap__track {
+  position: relative;
+  height: 30px;
+}
+.coursemap__track::before {
+  content: '';
+  position: absolute;
+  inset: 50% 0 auto;
+  height: 2px;
+  background: var(--rule);
+}
+.coursemap__mark {
+  top: 5px;
+  height: 20px;
+  cursor: pointer;
+}
+.coursemap__mark:hover {
+  box-shadow: inset 0 0 0 2px var(--ink);
+}
+.coursemap .watchmap__playhead {
+  top: 0;
+  bottom: 0;
+}
+
+.course__from {
+  margin: 1.5rem 0 0;
+  font-size: var(--t-small);
+  font-weight: 700;
+  color: var(--ink-muted);
+}
+.course__from + .now__title {
+  margin-top: 0.2rem;
+}
+.course__refs {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 0.2rem;
+}
+.course__group + .course__group {
+  margin-top: 1.25rem;
+}
+.course__group-title {
+  margin-top: 1rem;
+  font-size: var(--t-body);
+}
+.course__group-title .muted {
+  font-weight: 400;
+  font-size: var(--t-small);
+}
+.course__group .playlist__list {
+  margin-top: 0.5rem;
+}
+
+.course__section {
+  margin-top: 3.5rem;
+}
+.course__section h2 {
+  font-size: var(--t-h3);
+}
+.course__section > .muted {
+  margin-top: 0.5rem;
+  max-width: 70ch;
+}
+
+/* What's easy to miss: written down the red margin line of a notebook page. */
+.checklist {
+  list-style: none;
+  margin: 1.5rem 0 0;
+  padding: 0 0 0 1.1rem;
+  border-left: 2px solid var(--pen);
+  display: grid;
+  gap: 1.35rem;
+  max-width: 75ch;
+}
+.checklist__text {
+  margin: 0;
+  font-weight: 700;
+}
+.checklist__why {
+  margin: 0.25rem 0 0;
+}
+.checklist__refs {
+  margin: 0.35rem 0 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem 0.6rem;
+  align-items: baseline;
+}
+.checklist__refs .timelink {
+  padding-left: 0;
+}
+.checklist__in,
+.checklist__out {
+  font-size: var(--t-small);
+  color: var(--ink-muted);
+}
+.checklist__in {
+  padding: 0 0.3rem;
+  background: linear-gradient(transparent 55%, var(--hl-recommended) 55%);
+}
+
+.repeats {
+  list-style: none;
+  padding: 0;
+  margin: 1rem 0 0;
+  display: grid;
+  gap: 1rem;
+  max-width: 75ch;
+}
+.repeats p {
+  margin: 0;
+}
+.repeats .muted {
+  margin-top: 0.2rem;
+  font-size: var(--t-small);
+}
+
+.lectures {
+  list-style: none;
+  padding: 0;
+  margin: 1rem 0 0;
+  max-width: 900px;
+}
+.lecture {
+  display: grid;
+  grid-template-columns: 6.5rem minmax(0, 1fr) auto;
+  gap: 0.75rem;
+  align-items: center;
+  padding: 0.7rem 0;
+}
+.lecture + .lecture {
+  border-top: 1px solid var(--rule);
+}
+.lecture__label {
+  font-weight: 700;
+  font-size: var(--t-small);
+  font-variant-numeric: tabular-nums;
+}
+.lecture__body {
+  display: grid;
+  gap: 0.1rem;
+  min-width: 0;
+}
+.lecture__title {
+  font-weight: 700;
+}
+.lecture__body .muted {
+  font-size: var(--t-small);
+}
+.lecture__state--ready {
+  color: var(--ink);
+}
+.lecture__state--failed {
+  color: var(--error);
+}
+.course__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem 1rem;
+  align-items: center;
+  margin-top: 1.5rem;
+}
+.course__actions .external {
+  margin-top: 0;
+}
+
+/* Home: courses. */
+.courses {
+  margin-top: 4rem;
+}
+.courses h2 {
+  font-size: var(--t-h3);
+}
+.courses__list {
+  list-style: none;
+  padding: 0;
+  margin: 1rem 0 0;
+  display: grid;
+  gap: 0.5rem;
+}
+.courses__item {
+  display: grid;
+  gap: 0.15rem;
+  padding: 0.8rem 1rem;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  text-decoration: none;
+  color: inherit;
+}
+.courses__item:hover {
+  border-color: var(--ink);
+}
+.courses__title {
+  font-weight: 700;
+}
+.courses__meta {
+  font-size: var(--t-small);
+  color: var(--ink-muted);
+}
+.courses__group {
+  margin-top: 1rem;
+}
+.courses__group summary {
+  cursor: pointer;
+  font-weight: 700;
+  width: fit-content;
+}
+.courses__pick {
+  list-style: none;
+  padding: 0;
+  margin: 0.75rem 0 0;
+  display: grid;
+  gap: 0.35rem;
+  max-height: 20rem;
+  overflow-y: auto;
+}
+.courses__group-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: center;
+  margin-top: 0.75rem;
+}
+.courses__group-row input[type='text'] {
+  flex: 1 1 16rem;
+  width: auto;
+}
+.analyze__playlist {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.9rem;
+  align-items: center;
+  margin-top: 0.6rem;
+}
+.analyze__playlist .hint {
+  margin: 0;
+}
+
+@media (max-width: 640px) {
+  .coursemap__row,
+  .lecture {
+    grid-template-columns: 4.75rem minmax(0, 1fr);
+  }
+  .lecture__actions {
+    grid-column: 2;
   }
 }

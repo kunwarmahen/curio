@@ -10,6 +10,9 @@ worker checks every `queue_check_s` seconds and starts the oldest one when
 
 One analysis runs at a time. The conditions are checked before each start, so an
 analysis that is running when the window closes finishes, but no new one starts.
+After each analysis the job also writes playlist notes and a quiz (`queue_prepare`),
+checking the GPU again before each; the window isn't checked again, as for a video
+that is running.
 With Claude as the provider the GPU isn't involved and only the window applies.
 """
 
@@ -229,6 +232,11 @@ class QueueWorker:
                     self.start_job(analysis_id)
                     return analysis_id
             return None
+
+    def gpu_busy(self) -> str:
+        """For a queued job between its steps: why the GPU is busy with something other
+        than Curio, or "". Curio's own model counts as its own (its job is running)."""
+        return self.probe.busy_reason(own_recent_use=True) if self.probe else ""
 
     def status(self) -> QueueStatus:
         items = [QueueItem(**x) for x in self.repo.queue_items()]

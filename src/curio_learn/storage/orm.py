@@ -165,3 +165,49 @@ class CardStateRow(Base):
     reviews: Mapped[int] = mapped_column(Integer, default=0)
     lapses: Mapped[int] = mapped_column(Integer, default=0)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
+class CourseRow(Base):
+    """A course: lectures in order (from a YouTube playlist or grouped by hand) and a goal."""
+
+    __tablename__ = "courses"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    playlist_id: Mapped[str] = mapped_column(String(64), default="", index=True)
+    title: Mapped[str] = mapped_column(Text)
+    channel: Mapped[str] = mapped_column(Text, default="")
+    preferences_key: Mapped[str] = mapped_column(Text)
+    preferences_json: Mapped[dict] = mapped_column(JSON)
+    # [{video_id, title, duration_s}] in course order
+    lectures_json: Mapped[list] = mapped_column(JSON)
+    # {video_id: why it couldn't be queued}
+    errors_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    unavailable: Mapped[int] = mapped_column(Integer, default=0)
+    importing: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
+class CoursePlanRow(Base):
+    """A course playlist across lectures, with repeats and the checklist."""
+
+    __tablename__ = "course_plans"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    course_id: Mapped[str] = mapped_column(ForeignKey("courses.id", ondelete="CASCADE"), index=True)
+    inputs_key: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(16), index=True)
+    progress: Mapped[str] = mapped_column(Text, default="")
+    error: Mapped[str] = mapped_column(Text, default="")
+    plan_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
+class CourseWatchedRow(Base):
+    """A course playlist part the learner has watched (keyed by video and start)."""
+
+    __tablename__ = "course_watched"
+
+    course_id: Mapped[str] = mapped_column(ForeignKey("courses.id", ondelete="CASCADE"), primary_key=True)
+    part_key: Mapped[str] = mapped_column(String(48), primary_key=True)

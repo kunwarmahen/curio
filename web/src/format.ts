@@ -67,3 +67,30 @@ export function until(iso: string): string {
   const d = Math.round(h / 24)
   return d <= 1 ? 'tomorrow' : `in ${d} days`
 }
+
+/** "RAG Explained: From BM25 to Agentic RAG | Stanford CS329Z Lecture 3 with …" -> "RAG Explained: From BM25 to Agentic RAG" */
+export function shortTitle(title: string): string {
+  return title.split(' | ')[0].trim() || title
+}
+
+/** A YouTube playlist link (not a video in one): youtube.com/playlist?list=… */
+export function isPlaylistLink(url: string): boolean {
+  try {
+    const u = new URL(/^https?:\/\//.test(url.trim()) ? url.trim() : `https://${url.trim()}`)
+    return /(^|\.)youtube\.com$/.test(u.hostname) && u.pathname.replace(/\/$/, '') === '/playlist' && !!u.searchParams.get('list')
+  } catch {
+    return false
+  }
+}
+
+/** A video link that also names a playlist (…watch?v=…&list=…), but not a mix. */
+export function playlistOfVideo(url: string): string | null {
+  try {
+    const u = new URL(/^https?:\/\//.test(url.trim()) ? url.trim() : `https://${url.trim()}`)
+    const list = u.searchParams.get('list')
+    if (!/(^|\.)youtube\.com$/.test(u.hostname) || !u.searchParams.get('v') || !list) return null
+    return /^(RD|WL|LL)/.test(list) ? null : list
+  } catch {
+    return null
+  }
+}

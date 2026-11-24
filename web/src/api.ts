@@ -276,6 +276,92 @@ export interface QueueStatus {
   items: QueueItem[]
 }
 
+export type LectureState = 'ready' | 'other_goal' | 'queued' | 'analyzing' | 'failed' | 'missing'
+
+export interface CourseLecture {
+  position: number
+  label: string
+  video_id: string
+  title: string
+  duration_s: number
+  state: LectureState
+  analysis_id: string | null
+  pending_id: string | null
+  error: string
+  url: string
+}
+
+export interface CourseRef {
+  lecture: number
+  video_id: string
+  analysis_id: string
+  section_id: string
+  title: string
+  start_s: number
+  end_s: number
+}
+
+export interface CoursePart {
+  key: string
+  lecture: number
+  video_id: string
+  analysis_id: string
+  section_ids: string[]
+  title: string
+  start_s: number
+  end_s: number
+  duration_s: number
+  what_you_learn: string
+  why_valuable: string
+  importance: Importance
+  score: number
+  also_in: CourseRef[]
+}
+
+export interface CourseRepeat {
+  section: CourseRef
+  covered_by: CourseRef
+  reason: string
+}
+
+export interface ChecklistItem {
+  text: string
+  why: string
+  refs: CourseRef[]
+  in_playlist: boolean
+}
+
+export interface CoursePlan {
+  id: string
+  course_id: string
+  status: Status
+  progress: string
+  error: string
+  budget_s: number
+  total_s: number
+  original_s: number
+  analysis_ids: string[]
+  parts: CoursePart[]
+  repeats: CourseRepeat[]
+  checklist: ChecklistItem[]
+  warnings: string[]
+  elapsed_s: number
+}
+
+export interface Course {
+  id: string
+  title: string
+  channel: string
+  playlist_id: string
+  preferences: Preferences
+  lectures: CourseLecture[]
+  unavailable: number
+  importing: boolean
+  plan: CoursePlan | null
+  plan_stale: boolean
+  url: string
+}
+
 export class ApiError extends Error {
   code: string
   constructor(code: string, message: string) {
@@ -367,5 +453,28 @@ export const api = {
     request<CardState>('/flashcards/review', {
       method: 'POST',
       body: JSON.stringify({ study_id: studyId, card_id: cardId, grade }),
+    }),
+  courses: () => request<Course[]>('/courses'),
+  course: (id: string) => request<Course>(`/courses/${encodeURIComponent(id)}`),
+  addCourse: (url: string, preferences: Preferences) =>
+    request<{ course_id: string }>('/courses', { method: 'POST', body: JSON.stringify({ url, preferences }) }),
+  groupCourse: (title: string, analysisIds: string[]) =>
+    request<{ course_id: string }>('/courses/group', {
+      method: 'POST',
+      body: JSON.stringify({ title, analysis_ids: analysisIds }),
+    }),
+  deleteCourse: (id: string) => request<{ deleted: string }>(`/courses/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  refreshCourse: (id: string) =>
+    request<{ course_id: string }>(`/courses/${encodeURIComponent(id)}/refresh`, { method: 'POST' }),
+  buildCoursePlan: (id: string, minutes: number | null, force = false) =>
+    request<{ plan_id: string; status: Status }>(`/courses/${encodeURIComponent(id)}/plan`, {
+      method: 'POST',
+      body: JSON.stringify({ minutes, force }),
+    }),
+  courseWatched: (id: string) => request<string[]>(`/courses/${encodeURIComponent(id)}/watched`),
+  setCourseWatched: (id: string, partKey: string, watched: boolean) =>
+    request(`/courses/${encodeURIComponent(id)}/watched`, {
+      method: 'PUT',
+      body: JSON.stringify({ part_key: partKey, watched }),
     }),
 }

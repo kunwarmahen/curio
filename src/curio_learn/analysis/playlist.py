@@ -42,10 +42,20 @@ def _value(s: ScoredSection) -> float:
     return (s.score.final / 100) ** 2 * s.section.duration_s
 
 
-def select_sections(scored: list[ScoredSection], budget_s: float, config: PlaylistConfig) -> set[str]:
+def select_sections(
+    scored: list[ScoredSection],
+    budget_s: float,
+    config: PlaylistConfig,
+    *,
+    excludes: dict[str, set[str]] | None = None,
+) -> set[str]:
+    """Best sections that fit the budget. `excludes` maps a section to the ones it rules
+    out once chosen (a course's repeats: the same material in another lecture)."""
     by_id = {s.section.id: s for s in scored}
     limit = budget_s * config.budget_tolerance
     chosen: set[str] = set()
+    blocked: set[str] = set()
+    excludes = excludes or {}
     used = 0.0
 
     def cost(sid: str) -> float:
@@ -56,7 +66,7 @@ def select_sections(scored: list[ScoredSection], budget_s: float, config: Playli
     def try_add(sid: str) -> None:
         nonlocal used
         s = by_id[sid]
-        if sid in chosen or s.importance == Importance.SKIP:
+        if sid in chosen or sid in blocked or s.importance == Importance.SKIP:
             return
         if used + cost(sid) > limit:
             return
@@ -65,14 +75,20 @@ def select_sections(scored: list[ScoredSection], budget_s: float, config: Playli
         prereqs = [
             p
             for p in s.evaluation.builds_on
-            if p in by_id and p not in chosen and _RANK[by_id[p].importance] >= _RANK[Importance.RECOMMENDED]
+            if p in by_id
+            and p not in chosen
+            and p not in blocked
+            and _RANK[by_id[p].importance] >= _RANK[Importance.RECOMMENDED]
         ]
         bundle = [sid, *prereqs]
         if used + sum(cost(x) for x in bundle) > limit:
             bundle = [sid]  # prerequisites stay listed on the segment card instead
+        if any(y in bundle for x in bundle for y in excludes.get(x, ())):
+            bundle = [sid]  # a prerequisite that repeats the section itself
         for x in bundle:
             chosen.add(x)
             used += cost(x)
+            blocked.update(excludes.get(x, ()))
 
     ranked = sorted(scored, key=lambda s: (_RANK[s.importance], s.score.final), reverse=True)
     for s in ranked:

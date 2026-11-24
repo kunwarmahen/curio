@@ -116,7 +116,7 @@ function Queued({ analysis, onStarted }: { analysis: Analysis; onStarted: () => 
       <p className="muted">{analysis.video.channel}</p>
       <p className="queued__lede">
         Waiting in the queue. Curio analyzes queued videos one at a time{hours ? ` ${hours}` : ''}, when the GPU
-        is free. This page updates when it's done.
+        is free, and writes its notes and a quiz with flashcards too. This page updates when it's done.
       </p>
       {err && (
         <p className="form-error" role="alert">

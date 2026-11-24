@@ -13,6 +13,7 @@ from curio_learn.domain import (
     AnalysisStatus,
     Answer,
     CardState,
+    CoursePlan,
     LearningNotes,
     LearningPreferences,
     NotesScope,
@@ -26,6 +27,9 @@ from curio_learn.storage.orm import (
     AnalysisRow,
     Base,
     CardStateRow,
+    CoursePlanRow,
+    CourseRow,
+    CourseWatchedRow,
     EmbeddingRow,
     NotesRow,
     QuestionRow,
@@ -340,7 +344,14 @@ class Repository:
                     StudySetRow.status.in_([AnalysisStatus.PENDING.value, AnalysisStatus.RUNNING.value])
                 )
             ).all()
-            stale = [r for r in [*rows, *notes, *study] if _aware(r.updated_at) < cutoff]
+            plans = db.scalars(
+                select(CoursePlanRow).where(
+                    CoursePlanRow.status.in_([AnalysisStatus.PENDING.value, AnalysisStatus.RUNNING.value])
+                )
+            ).all()
+            stale = [r for r in [*rows, *notes, *study, *plans] if _aware(r.updated_at) < cutoff]
+            # An import thread doesn't survive its process either.
+            db.execute(update(CourseRow).where(CourseRow.importing.is_(True)).values(importing=False))
             for row in stale:
                 row.status, row.error = AnalysisStatus.FAILED.value, "Interrupted: the process running it stopped."
             return len(stale)
@@ -671,3 +682,222 @@ class Repository:
     def save_embeddings(self, video_id: str, model: str, blocks_key: str, vectors: list[list[float]]) -> None:
         with self.session() as db, db.begin():
             db.merge(EmbeddingRow(video_id=video_id, model=model, blocks_key=blocks_key, vectors=vectors))
+
+    # ----------------------------------------------------------------- courses
+
+    @staticmethod
+    def _course_dict(row: CourseRow) -> dict:
+        return {
+            "id": row.id,
+            "playlist_id": row.playlist_id,
+            "title": row.title,
+            "channel": row.channel,
+            "preferences": LearningPreferences.model_validate(row.preferences_json),
+            "lectures": list(row.lectures_json or []),
+            "errors": dict(row.errors_json or {}),
+            "unavailable": row.unavailable,
+            "importing": row.importing,
+            "created_at": _aware(row.created_at),
+        }
+
+    def create_course(
+        self,
+        course_id: str,
+        *,
+        title: str,
+        channel: str,
+        playlist_id: str,
+        prefs: LearningPreferences,
+        lectures: list[dict],
+        unavailable: int = 0,
+        importing: bool = False,
+    ) -> None:
+        with self.session() as db, db.begin():
+            db.add(
+                CourseRow(
+                    id=course_id,
+                    playlist_id=playlist_id,
+                    title=title,
+                    channel=channel,
+                    preferences_key=prefs.cache_key(),
+                    preferences_json=prefs.model_dump(mode="json"),
+                    lectures_json=lectures,
+                    errors_json={},
+                    unavailable=unavailable,
+                    importing=importing,
+                )
+            )
+
+    def find_course(self, playlist_id: str, prefs: LearningPreferences) -> str | None:
+        with self.session() as db:
+            return db.scalar(
+                select(CourseRow.id)
+                .where(CourseRow.playlist_id == playlist_id, CourseRow.preferences_key == prefs.cache_key())
+                .order_by(CourseRow.created_at.desc())
+                .limit(1)
+            )
+
+    def update_course(self, course_id: str, **fields) -> None:
+        """Set `lectures`, `errors`, `importing`, `title`, `channel` or `unavailable`."""
+        names = {"lectures": "lectures_json", "errors": "errors_json"}
+        with self.session() as db, db.begin():
+            row = db.get(CourseRow, course_id)
+            if row is None:
+                raise KeyError(course_id)
+            for k, v in fields.items():
+                setattr(row, names.get(k, k), v)
+
+    def set_course_error(self, course_id: str, video_id: str, error: str) -> None:
+        with self.session() as db, db.begin():
+            row = db.get(CourseRow, course_id)
+            if row is not None:
+                errors = dict(row.errors_json or {})
+                if error:
+                    errors[video_id] = error
+                else:
+                    errors.pop(video_id, None)
+                row.errors_json = errors
+
+    def get_course(self, course_id: str) -> dict | None:
+        with self.session() as db:
+            row = db.get(CourseRow, course_id)
+            return self._course_dict(row) if row else None
+
+    def list_courses(self) -> list[dict]:
+        with self.session() as db:
+            rows = db.scalars(select(CourseRow).order_by(CourseRow.updated_at.desc()))
+            return [self._course_dict(r) for r in rows]
+
+    def delete_course(self, course_id: str) -> bool:
+        with self.session() as db, db.begin():
+            db.execute(delete(CourseWatchedRow).where(CourseWatchedRow.course_id == course_id))
+            db.execute(delete(CoursePlanRow).where(CoursePlanRow.course_id == course_id))
+            return db.execute(delete(CourseRow).where(CourseRow.id == course_id)).rowcount > 0
+
+    def analyses_for_videos(self, video_ids: list[str]) -> list[dict]:
+        """Every analysis of these videos (without results), newest first."""
+        if not video_ids:
+            return []
+        with self.session() as db:
+            stmt = (
+                select(
+                    AnalysisRow.id,
+                    AnalysisRow.video_id,
+                    AnalysisRow.preferences_key,
+                    AnalysisRow.status,
+                    AnalysisRow.error,
+                    AnalysisRow.updated_at,
+                )
+                .where(AnalysisRow.video_id.in_(video_ids))
+                .order_by(AnalysisRow.updated_at.desc())
+            )
+            return [
+                {
+                    "id": r.id,
+                    "video_id": r.video_id,
+                    "preferences_key": r.preferences_key,
+                    "status": AnalysisStatus(r.status),
+                    "error": r.error,
+                    "updated_at": _aware(r.updated_at),
+                }
+                for r in db.execute(stmt)
+            ]
+
+    def create_course_plan(self, plan: CoursePlan, inputs_key: str) -> None:
+        """A pending plan; its budget and analysis ids are the inputs for the run."""
+        with self.session() as db, db.begin():
+            db.add(
+                CoursePlanRow(
+                    id=plan.id,
+                    course_id=plan.course_id,
+                    inputs_key=inputs_key,
+                    status=AnalysisStatus.PENDING.value,
+                    plan_json=plan.model_dump(mode="json"),
+                )
+            )
+
+    def update_course_plan_status(
+        self, plan_id: str, status: AnalysisStatus, progress: str = "", error: str = ""
+    ) -> None:
+        with self.session() as db, db.begin():
+            row = db.get(CoursePlanRow, plan_id)
+            if row:
+                row.status, row.progress, row.error = status.value, progress, error
+
+    def save_course_plan(self, plan: CoursePlan) -> None:
+        with self.session() as db, db.begin():
+            row = db.get(CoursePlanRow, plan.id)
+            if row is None:
+                raise KeyError(plan.id)
+            row.status, row.progress, row.error = plan.status.value, plan.progress, plan.error
+            row.plan_json = plan.model_dump(mode="json")
+
+    @staticmethod
+    def _plan_from_row(row: CoursePlanRow) -> CoursePlan:
+        """The saved plan (a pending one holds its inputs), with the row's live status."""
+        base = (
+            CoursePlan.model_validate(row.plan_json)
+            if row.plan_json
+            else CoursePlan(id=row.id, course_id=row.course_id)
+        )
+        return base.model_copy(
+            update={
+                "status": AnalysisStatus(row.status),
+                "progress": row.progress,
+                "error": row.error,
+                "created_at": _aware(row.created_at),
+            }
+        )
+
+    def get_course_plan(self, plan_id: str) -> CoursePlan | None:
+        with self.session() as db:
+            row = db.get(CoursePlanRow, plan_id)
+            return self._plan_from_row(row) if row else None
+
+    def latest_course_plan(self, course_id: str) -> CoursePlan | None:
+        """The newest plan that isn't failed, else the newest one."""
+        with self.session() as db:
+            rows = list(
+                db.scalars(
+                    select(CoursePlanRow)
+                    .where(CoursePlanRow.course_id == course_id)
+                    .order_by(CoursePlanRow.created_at.desc())
+                )
+            )
+        if not rows:
+            return None
+        live = next((r for r in rows if r.status != AnalysisStatus.FAILED.value), rows[0])
+        # A failed rebuild is shown (with its error) only when it's the newest.
+        return self._plan_from_row(rows[0] if rows[0].status == AnalysisStatus.FAILED.value else live)
+
+    def find_course_plan(self, course_id: str, inputs_key: str, *, stale_after: timedelta = STALE_AFTER) -> str | None:
+        cutoff = datetime.now(UTC) - stale_after
+        with self.session() as db:
+            rows = db.scalars(
+                select(CoursePlanRow)
+                .where(
+                    CoursePlanRow.course_id == course_id,
+                    CoursePlanRow.inputs_key == inputs_key,
+                    CoursePlanRow.status != AnalysisStatus.FAILED.value,
+                )
+                .order_by(CoursePlanRow.created_at.desc())
+            )
+            for row in rows:
+                if row.status == AnalysisStatus.DONE.value or _aware(row.updated_at) >= cutoff:
+                    return row.id
+            return None
+
+    def course_watched(self, course_id: str) -> set[str]:
+        with self.session() as db:
+            return set(db.scalars(select(CourseWatchedRow.part_key).where(CourseWatchedRow.course_id == course_id)))
+
+    def set_course_watched(self, course_id: str, part_key: str, watched: bool) -> None:
+        with self.session() as db, db.begin():
+            if watched:
+                db.merge(CourseWatchedRow(course_id=course_id, part_key=part_key))
+            else:
+                db.execute(
+                    delete(CourseWatchedRow).where(
+                        CourseWatchedRow.course_id == course_id, CourseWatchedRow.part_key == part_key
+                    )
+                )

@@ -79,6 +79,14 @@ def main(argv: list[str] | None = None) -> int:
     qu.add_argument("--minutes", type=float, default=None)
     qu.add_argument("--remove", metavar="ANALYSIS_ID", help="Take a video out of the queue")
 
+    co = sub.add_parser("course", help="Add a course from a YouTube playlist, list courses, or build a course playlist")
+    co.add_argument("target", nargs="?", help="A playlist link to add, or a course id to show; nothing lists courses")
+    co.add_argument("--profile", choices=[p.value for p in LearningProfile], help="Default: your saved goal")
+    co.add_argument("--objective", default=None)
+    co.add_argument("--build", action="store_true", help="Build the course playlist from the analyzed lectures")
+    co.add_argument("--minutes", type=int, default=None, help="Course playlist length (default: ~15 min a lecture)")
+    co.add_argument("--force", action="store_true", help="Build a new course playlist even if a saved one exists")
+
     api = sub.add_parser("api", help="Run the API server (also serves the built web UI)")
     # All interfaces, so phones and laptops on the LAN can use it. --host 127.0.0.1 keeps it local.
     api.add_argument("--host", default="0.0.0.0")
@@ -130,6 +138,10 @@ def main(argv: list[str] | None = None) -> int:
         for w in notes.warnings:
             print(f"Warning: {w}", file=sys.stderr)
         return 0
+    if args.cmd == "course":
+        from curio_learn.service import CurioService
+
+        return run_course(args, CurioService(settings))
     if args.cmd == "quiz":
         from curio_learn.service import CurioService
 
@@ -228,3 +240,78 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+_LECTURE_STATE = {
+    "ready": "analyzed",
+    "other_goal": "analyzed for another goal",
+    "queued": "queued",
+    "analyzing": "analyzing",
+    "failed": "failed",
+    "missing": "not queued",
+}
+
+
+def run_course(args, service) -> int:
+    from curio_learn.domain import fmt_ts
+
+    if not args.target:
+        courses = service.courses()
+        if not courses:
+            print("No courses yet. Add one with: curio course <youtube playlist link>")
+        for c in courses:
+            ready = sum(lec.analysis_id is not None for lec in c.lectures)
+            print(f"{c.id}  {c.title}  ({ready} of {len(c.lectures)} lectures analyzed)")
+        return 0
+    try:
+        if "list=" in args.target:
+            prefs = cli_preferences(
+                argparse.Namespace(profile=args.profile, objective=args.objective, minutes=None), service
+            )
+            course_id = service.import_course(args.target, prefs)
+            print("… Checking each lecture's captions and queuing the ones not analyzed yet", flush=True)
+            service.queue_course(course_id)
+        else:
+            course_id = args.target
+        course = service.course(course_id)
+        if course is None:
+            print(f"Error: no course with id {course_id}", file=sys.stderr)
+            return 1
+        print(f"{course.title} ({course.id})")
+        for lec in course.lectures:
+            state = _LECTURE_STATE[lec.state.value]
+            extra = f": {lec.error}" if lec.error else ""
+            print(f"  {lec.label:>10}  {lec.title}  [{state}{extra}]")
+        if course.unavailable:
+            print(f"  ({course.unavailable} private or deleted video(s) in the playlist were left out)")
+        if not args.build:
+            return 0
+        plan = service.course_plan(
+            course_id, args.minutes, force=args.force, progress=lambda m: print(f"… {m}", flush=True)
+        )
+    except CurioError as exc:
+        print(f"Error ({exc.code}): {exc.message}", file=sys.stderr)
+        return 1
+    print(f"\nCourse playlist: {fmt_ts(plan.total_s)} of {fmt_ts(plan.original_s)} ({len(plan.parts)} parts)")
+    label = {lec.position: lec.label for lec in course.lectures}
+    lecture = None
+    for part in plan.parts:
+        if part.lecture != lecture:
+            lecture = part.lecture
+            print(f"\n{label.get(lecture, lecture)}")
+        print(f"  {fmt_ts(part.start_s)}–{fmt_ts(part.end_s)}  {part.title}")
+    if plan.repeats:
+        print("\nLeft out, taught in another lecture:")
+        for r in plan.repeats:
+            print(
+                f"  {label.get(r.section.lecture)} {fmt_ts(r.section.start_s)} {r.section.title}  →  "
+                f"{label.get(r.covered_by.lecture)} {fmt_ts(r.covered_by.start_s)} {r.covered_by.title}"
+            )
+    if plan.checklist:
+        print("\nEasy to miss:")
+        for item in plan.checklist:
+            where = ", ".join(f"{label.get(r.lecture)} {fmt_ts(r.start_s)}" for r in item.refs)
+            print(f"  - {item.text} ({where})")
+    for w in plan.warnings:
+        print(f"Warning: {w}", file=sys.stderr)
+    return 0

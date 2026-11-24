@@ -44,6 +44,8 @@ export interface Clip {
   nonce: number
   /** false: cue the clip without starting playback (initial page load). */
   autoplay: boolean
+  /** Another video than the player's own (a course plays parts of several lectures). */
+  video_id?: string
 }
 
 interface Props {
@@ -61,6 +63,8 @@ export function Player({ videoId, clip, onTime, onClipEnd }: Props) {
   const player = useRef<YTPlayer | null>(null)
   const [ready, setReady] = useState(false)
   const [failed, setFailed] = useState(false)
+  // The video's owner doesn't allow playing it on other sites (YouTube errors 101 and 150).
+  const [blocked, setBlocked] = useState(false)
   const [rate, setRate] = useState(1)
   const rateRef = useRef(1)
   const handlers = useRef({ onTime, onClipEnd })
@@ -82,6 +86,9 @@ export function Player({ videoId, clip, onTime, onClipEnd }: Props) {
             onStateChange: (e: { data: number }) => {
               if (e.data === window.YT?.PlayerState.ENDED) handlers.current.onClipEnd()
             },
+            onError: (e: { data: number }) => {
+              if (e.data === 101 || e.data === 150) setBlocked(true)
+            },
           },
         })
       })
@@ -95,7 +102,8 @@ export function Player({ videoId, clip, onTime, onClipEnd }: Props) {
 
   useEffect(() => {
     if (!ready || !clip || !player.current) return
-    const opts = { videoId, startSeconds: clip.start_s, endSeconds: clip.end_s }
+    setBlocked(false)
+    const opts = { videoId: clip.video_id ?? videoId, startSeconds: clip.start_s, endSeconds: clip.end_s }
     if (clip.autoplay) player.current.loadVideoById(opts)
     else player.current.cueVideoById(opts)
     player.current.setPlaybackRate(rateRef.current)
@@ -125,6 +133,19 @@ export function Player({ videoId, clip, onTime, onClipEnd }: Props) {
           </p>
         ) : (
           <div ref={host} />
+        )}
+        {blocked && clip && (
+          <div className="player__blocked" role="status">
+            <p>The owner of this video doesn't allow playing it on other sites.</p>
+            <a
+              className="button-primary"
+              href={`https://www.youtube.com/watch?v=${clip.video_id ?? videoId}&t=${Math.floor(clip.start_s)}s`}
+              target="_blank"
+              rel="noreferrer"
+            >
+              Watch this part on YouTube
+            </a>
+          </div>
         )}
       </div>
       <div className="player__rates" role="group" aria-label="Playback speed">

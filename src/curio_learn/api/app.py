@@ -21,6 +21,7 @@ from curio_learn.domain import (
     Block,
     CardGrade,
     CardState,
+    Course,
     FlashcardDeck,
     LearningNotes,
     LearningPreferences,
@@ -92,6 +93,35 @@ class RetargetRequest(BaseModel):
     save_default: bool = True
 
 
+class CourseRequest(BaseModel):
+    url: str  # a YouTube playlist link
+    preferences: LearningPreferences = LearningPreferences()
+
+
+class GroupRequest(BaseModel):
+    title: str = ""
+    analysis_ids: list[str]
+
+
+class CourseAccepted(BaseModel):
+    course_id: str
+
+
+class PlanRequest(BaseModel):
+    minutes: int | None = None  # empty: about 15 minutes a lecture
+    force: bool = False
+
+
+class PlanAccepted(BaseModel):
+    plan_id: str
+    status: AnalysisStatus
+
+
+class WatchedRequest(BaseModel):
+    part_key: str
+    watched: bool
+
+
 class NotesAccepted(BaseModel):
     notes_id: str
     status: AnalysisStatus
@@ -147,14 +177,16 @@ def build_queue(service: CurioService, jobs: Jobs) -> QueueWorker:
         window = Window.parse("1-7")
     probe = None
     if s.resolved_provider == "ollama":
-        own = {s.model_for(t) for t in ("outline", "evaluate", "notes", "ask")} | {s.embed_model} - {""}
+        own = {s.model_for(t) for t in ("outline", "evaluate", "notes", "study", "course", "ask")} | {s.embed_model} - {
+            ""
+        }
         probe = LocalGpuProbe(busy_percent=s.queue_gpu_busy_percent, ollama_host=s.ollama_host, own_models=own)
     worker = QueueWorker(
         service.repo,
         window=window,
         probe=probe,
         active=jobs.active,
-        start=lambda analysis_id: jobs.submit(_run_safely, service, analysis_id),
+        start=lambda analysis_id: jobs.submit(_run_queued, service, analysis_id, worker),
     )
     jobs.on_done = worker.touch
     return worker
@@ -162,6 +194,9 @@ def build_queue(service: CurioService, jobs: Jobs) -> QueueWorker:
 
 def create_app(service: CurioService | None = None) -> FastAPI:
     jobs = Jobs()
+    # Reading a course's lectures from YouTube is network work, not GPU work: it runs
+    # beside the job executor so it never holds up an analysis (or the queue).
+    imports = ThreadPoolExecutor(max_workers=1, thread_name_prefix="curio-import")
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -179,6 +214,7 @@ def create_app(service: CurioService | None = None) -> FastAPI:
         yield
         app.state.queue.stop()
         jobs.shutdown()
+        imports.shutdown(wait=False, cancel_futures=True)
 
     app = FastAPI(title="Curio API", version="0.1.0", lifespan=lifespan)
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -297,6 +333,74 @@ def create_app(service: CurioService | None = None) -> FastAPI:
     def quiz_attempts(study_id: str, request: Request):
         return svc(request).quiz_attempts(study_id)
 
+    # ------------------------------------------------------------- courses
+
+    def course_or_404(s: CurioService, course_id: str) -> Course:
+        course = s.course(course_id)
+        if course is None:
+            raise HTTPException(404, {"code": "not_found", "message": "Unknown course id"})
+        return course
+
+    @app.post("/api/v1/courses", status_code=202, response_model=CourseAccepted)
+    def create_course(body: CourseRequest, request: Request):
+        s = svc(request)
+        course_id = s.import_course(body.url, body.preferences)
+        imports.submit(_queue_course_safely, s, course_id)
+        return CourseAccepted(course_id=course_id)
+
+    @app.post("/api/v1/courses/group", status_code=201, response_model=CourseAccepted)
+    def group_course(body: GroupRequest, request: Request):
+        return CourseAccepted(course_id=svc(request).group_course(body.title, body.analysis_ids))
+
+    @app.get("/api/v1/courses", response_model=list[Course])
+    def list_courses(request: Request):
+        return svc(request).courses()
+
+    @app.get("/api/v1/courses/{course_id}", response_model=Course)
+    def get_course(course_id: str, request: Request):
+        return course_or_404(svc(request), course_id)
+
+    @app.delete("/api/v1/courses/{course_id}")
+    def delete_course(course_id: str, request: Request):
+        if not svc(request).delete_course(course_id):
+            raise HTTPException(404, {"code": "not_found", "message": "Unknown course id"})
+        return {"deleted": course_id}
+
+    @app.post("/api/v1/courses/{course_id}/refresh", status_code=202, response_model=CourseAccepted)
+    def refresh_course(course_id: str, request: Request):
+        """Read the playlist again (new lectures) and queue what isn't analyzed yet."""
+        s = svc(request)
+        course = course_or_404(s, course_id)
+        if course.playlist_id:
+            s.import_course(course.url, course.preferences)
+        else:
+            s.repo.update_course(course_id, importing=True)
+        imports.submit(_queue_course_safely, s, course_id)
+        return CourseAccepted(course_id=course_id)
+
+    @app.post("/api/v1/courses/{course_id}/plan", status_code=202, response_model=PlanAccepted)
+    def create_plan(course_id: str, body: PlanRequest, request: Request):
+        s = svc(request)
+        try:
+            plan_id, needs_run = s.submit_course_plan(course_id, body.minutes, force=body.force)
+        except KeyError:
+            raise HTTPException(404, {"code": "not_found", "message": "Unknown course id"}) from None
+        if needs_run:
+            jobs.submit(_run_course_plan_safely, s, plan_id)
+        current = s.repo.get_course_plan(plan_id)
+        return PlanAccepted(plan_id=plan_id, status=current.status if current else AnalysisStatus.PENDING)
+
+    @app.get("/api/v1/courses/{course_id}/watched", response_model=list[str])
+    def course_watched(course_id: str, request: Request):
+        return sorted(svc(request).course_watched(course_id))
+
+    @app.put("/api/v1/courses/{course_id}/watched")
+    def set_course_watched(course_id: str, body: WatchedRequest, request: Request):
+        s = svc(request)
+        course_or_404(s, course_id)
+        s.set_course_watched(course_id, body.part_key, body.watched)
+        return {"part_key": body.part_key, "watched": body.watched}
+
     @app.get("/api/v1/flashcards", response_model=FlashcardDeck)
     def flashcards(request: Request, analysis_id: str | None = None, study_id: str | None = None, limit: int = 50):
         return svc(request).flashcards(analysis_id, study_id=study_id, limit=min(max(limit, 0), 500))
@@ -402,6 +506,32 @@ def _run_safely(service: CurioService, analysis_id: str) -> None:
         service.run(analysis_id)
     except Exception:  # status is already recorded as failed by the service
         log.warning("Analysis %s failed", analysis_id, exc_info=True)
+
+
+def _run_queued(service: CurioService, analysis_id: str, worker: QueueWorker) -> None:
+    """A queued video: analyze it, then write its notes and quiz while the GPU stays free."""
+    try:
+        service.run(analysis_id)
+    except Exception:
+        log.warning("Analysis %s failed", analysis_id, exc_info=True)
+        return
+    if service.settings.queue_prepare:
+        written = service.prepare(analysis_id, gpu_busy=worker.gpu_busy)
+        log.info("Queue prepared %s for analysis %s", ", ".join(written) or "nothing new", analysis_id)
+
+
+def _queue_course_safely(service: CurioService, course_id: str) -> None:
+    try:
+        service.queue_course(course_id)
+    except Exception:
+        log.warning("Queuing course %s failed", course_id, exc_info=True)
+
+
+def _run_course_plan_safely(service: CurioService, plan_id: str) -> None:
+    try:
+        service.run_course_plan(plan_id)
+    except Exception:
+        log.warning("Course plan %s failed", plan_id, exc_info=True)
 
 
 def _run_study_safely(service: CurioService, study_id: str) -> None:

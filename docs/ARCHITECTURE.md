@@ -58,6 +58,7 @@ curio/
 │   ├── ingestion/
 │   │   ├── url.py            YouTube URL → 11-char video id
 │   │   ├── metadata.py       MetadataProvider protocol + yt-dlp impl (no download)
+│   │   ├── playlist.py       YouTube playlists (courses) via yt-dlp, flat; lecture order
 │   │   └── transcripts.py    TranscriptProvider protocol + youtube-transcript-api impl
 │   ├── processing/
 │   │   └── normalize.py      cue cleanup, de-overlap, merge into timestamped blocks
@@ -81,6 +82,7 @@ curio/
 │   │   ├── notes.py          learning notes, takeaways, definitions, Markdown export
 │   │   ├── ask.py            Ask the Video: context selection, grounded answers
 │   │   ├── study.py          quizzes and flashcards, spaced-repetition schedule
+│   │   ├── course.py         course playlist across lectures: repeats, checklist
 │   │   └── pipeline.py       orchestrates the steps, reports progress
 │   ├── storage/
 │   │   ├── orm.py            SQLAlchemy tables
@@ -88,7 +90,7 @@ curio/
 │   ├── api/app.py            FastAPI app
 │
 ├── web/                      React + Vite + TypeScript frontend
-│   └── src/                  pages (Home, VideoPage), WatchMap, Player, api.ts
+│   └── src/                  pages (Home, VideoPage, Course, Review), WatchMap, Player, api.ts
 └── tests/                    pytest; no network, LLM mocked
 ```
 
@@ -182,6 +184,13 @@ invent a timestamp: code converts the numbers to the original cue times.
 | `GET`  | `/flashcards?study_id=&analysis_id=&limit=` | `FlashcardDeck {cards[DueCard], due, total, next_due_at}`: due cards from every video's newest set, one video's, or one set |
 | `POST` | `/flashcards/review` | `{study_id, card_id, grade: again\|good\|easy}` → `CardState` |
 | `GET`  | `/preferences/default` / `PUT` | the learner's default goal `{profile, custom_objective, target_minutes}` (`PUT` body `{preferences}`) |
+| `POST` | `/courses` | `{url, preferences}` → `202 {course_id}`: a course from a YouTube playlist (the same playlist and goal reuse the course). Its lectures are checked and queued in a background thread beside the job worker |
+| `POST` | `/courses/group` | `{title, analysis_ids}` → `201 {course_id}`: a course of analyzed videos, in upload order |
+| `GET`  | `/courses` / `/courses/{id}` | `Course`: lectures with their state (`ready`, `other_goal`, `queued`, `analyzing`, `failed`, `missing`), the newest `plan`, `plan_stale` |
+| `DELETE` | `/courses/{id}` | delete a course (its analyses stay) |
+| `POST` | `/courses/{id}/refresh` | read the playlist again and queue new lectures |
+| `POST` | `/courses/{id}/plan` | `{minutes?, force?}` → `202 {plan_id, status}`: build the course playlist from the lectures analyzed so far, on the job worker |
+| `GET`  | `/courses/{id}/watched` / `PUT` | watched course parts (`PUT` body `{part_key, watched}`) |
 | `POST` | `/queue/preferences` | `{preferences, analysis_ids?, save_default?}` → `{updated[], already_analyzed[]}`: give queued videos a goal (all queued when no ids); a video already analyzed with that goal leaves the queue |
 
 Errors use `{"detail": {"code": "...", "message": "..."}}` with codes
@@ -361,7 +370,16 @@ when all of these hold:
 
 The conditions are checked before each start, so a run started at 6:55 finishes
 after 7:00, and a GPU job started at night pauses the queue before the next video.
-The worker remembers the last reason it waited, which `GET /queue` reports. In
+The worker remembers the last reason it waited, which `GET /queue` reports.
+
+**Preparing study material.** With `CURIO_QUEUE_PREPARE` (default on), the queued job
+doesn't end with the analysis: `CurioService.prepare` then writes playlist notes and a
+quiz with flashcards, reusing any that already exist, so a video queued at night is
+ready to watch, read and practice in the morning. Before each of the two it asks the
+GPU probe again (`QueueWorker.gpu_busy`, which counts Curio's own loaded model as its
+own); if someone else started using the GPU, the rest is skipped and can be written
+from the video's page. The window isn't checked again, as for a running analysis.
+"Analyze now" and starting a queued video by hand don't prepare anything. In
 Podman, `curio.sh` mounts the host's `/etc/localtime` and, when an NVIDIA CDI spec
 exists, adds `--device nvidia.com/gpu=all` so `nvidia-smi` works in the container.
 
@@ -399,7 +417,61 @@ The review deck is each analysis's newest finished set (writing a new set replac
 the cards in review; the old set can still be drilled from the tab by `study_id`):
 overdue cards first, most overdue first, then new cards in video order.
 
-## 13. Phase 1 MVP milestone
+## 13. Courses (`ingestion/playlist.py`, `analysis/course.py`)
+
+**Lectures.** A course is a list of videos in order (`courses.lectures_json`) and a
+goal. From a playlist, yt-dlp lists the entries flat (no download, one request);
+private and deleted entries are counted and left out. When the lecture numbers in
+the titles mostly go down along the playlist, it's reversed (CS329Z is newest
+first). Importing then calls `submit(..., queue=True)` for each lecture, which
+fetches its captions and reuses any analysis with the course goal, so only new
+lectures are queued, in course order. Why a lecture couldn't be queued (no captions)
+is stored per video. A lecture's state is worked out on every read from its
+analyses: done with the course goal (`ready`); done only with another goal
+(`other_goal`, used meanwhile, its scores from that goal); queued or running with the
+course goal; failed; or missing. Labels come from the titles ("Lecture 6") when
+they number the lectures uniquely, else the position.
+
+**Course playlist.** Inputs: the analysis ids in course order and a length; a plan
+with the same inputs and model is reused, and `plan_stale` says lectures changed.
+
+1. Items: every section that isn't skip, intro, outro, housekeeping or sponsor, and
+   not an optional section under 2 minutes (those only filled leftover seconds, out
+   of context). Scores come from each lecture's analysis; half of each is the
+   section's rank within its lecture, so they compare across lectures.
+2. Candidates: each item's closest item in another lecture, by cosine of
+   `nomic-embed-text` vectors of title, summary, concepts and what it teaches
+   (TF-IDF without an embedder). The closest pairs, up to 4 per lecture (at most 48).
+3. Judging, 12 pairs a call: summaries plus about 160 words of transcript from each
+   side (the opening and the middle). Verdict `repeat` (watch one), `overlap` (each
+   adds something) or `different`, which one to keep, and a reason.
+4. Selection: the playlist selector over all items at once, with section ids
+   prefixed by lecture (prerequisites too). For a repeat, the half to skip starts
+   15 points lower and is no longer essential, and choosing either half rules out the
+   other (`select_sections(excludes=...)`). Parts are merged within a lecture as in a
+   video playlist; `also_in` lists related sections in other lectures. A left-out
+   repeat is listed once, with its closest match.
+5. Checklist: the course outline (ids like `L3.S05`, title, summary, concepts;
+   summaries of weaker sections are dropped if it doesn't fit the context) and the
+   learner brief. 8–12 points, each citing sections; points without a real section
+   are dropped, and each says whether its sections are in the course playlist.
+
+On CS329Z (7 lectures, 9 h 9 min, qwen3.8 27B): 28 pairs judged in 3 calls and the
+checklist in one, 1.5–2 minutes in all. A 90-minute budget gave 19 parts (1 h 38
+min, inside the 10% tolerance). Repeats found: RAG failure modes (Lectures 3 and 4),
+context engineering (2 and 6), skills (6 and 7). The first prompt also called
+"MemGPT Q&A" a repeat of "context tips" because both mention KV-cache invalidation;
+saying that one shared point isn't a repeat fixed it. Checklist claims checked
+against the transcripts (reader accuracy saturating after 10–20 documents; memory
+agents scoring worst on MemoryArena) were in the lectures.
+
+**Playback.** One YouTube player; a clip names its video, so the course plays parts
+of several lectures in a row. Watched parts are stored per course by
+`<video id>@<start second>`, which survives rebuilds that keep the part. YouTube
+errors 101 and 150 (embedding turned off by the owner) show a link to that moment on
+YouTube instead.
+
+## 14. Phase 1 MVP milestone
 
 **Done when:** pasting the test lecture (`e_m99aR7_3Q`, 80 min) produces a
 validated playlist of about 15–30 minutes in which every segment has an accurate

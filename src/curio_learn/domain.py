@@ -448,3 +448,120 @@ class FlashcardDeck(BaseModel):
     due: int  # cards due now (including new ones)
     total: int  # cards in the deck
     next_due_at: datetime | None = None  # when the next card not due now comes due
+
+
+# ------------------------------------------------------------------------- courses
+
+
+class LectureState(StrEnum):
+    READY = "ready"  # analyzed with the course goal
+    OTHER_GOAL = "other_goal"  # analyzed only with another goal (used until the course goal's run is done)
+    QUEUED = "queued"
+    ANALYZING = "analyzing"
+    FAILED = "failed"
+    MISSING = "missing"  # not analyzed or queued (e.g. no captions)
+
+
+class CourseLecture(BaseModel):
+    position: int  # 1-based, in course order
+    label: str = ""  # "Lecture 3" when the titles number the lectures, else "#3"
+    video_id: str
+    title: str
+    duration_s: float = 0.0
+    state: LectureState = LectureState.MISSING
+    analysis_id: str | None = None  # the finished analysis the course uses
+    pending_id: str | None = None  # a queued or running analysis with the course goal
+    error: str = ""
+
+    @computed_field
+    @property
+    def url(self) -> str:
+        return f"https://www.youtube.com/watch?v={self.video_id}"
+
+
+class CourseRef(BaseModel):
+    """A section of one lecture."""
+
+    lecture: int
+    video_id: str
+    analysis_id: str
+    section_id: str
+    title: str
+    start_s: float
+    end_s: float
+
+
+class CoursePart(BaseModel):
+    """One stretch of the course playlist: part of one lecture."""
+
+    key: str  # stable across rebuilds: "<video_id>@<start seconds>"
+    lecture: int
+    video_id: str
+    analysis_id: str
+    section_ids: list[str]
+    title: str
+    start_s: float
+    end_s: float
+    what_you_learn: str
+    why_valuable: str = ""
+    importance: Importance
+    score: float
+    also_in: list[CourseRef] = Field(default_factory=list)  # related sections in other lectures
+
+    @computed_field
+    @property
+    def duration_s(self) -> float:
+        return round(self.end_s - self.start_s, 2)
+
+
+class CourseRepeat(BaseModel):
+    """A section left out because another lecture teaches the same thing."""
+
+    section: CourseRef
+    covered_by: CourseRef
+    reason: str
+
+
+class ChecklistItem(BaseModel):
+    text: str
+    why: str = ""
+    refs: list[CourseRef]
+    in_playlist: bool = False  # at least one cited section is in the course playlist
+
+
+class CoursePlan(BaseModel):
+    id: str
+    course_id: str
+    status: AnalysisStatus = AnalysisStatus.PENDING
+    progress: str = ""
+    error: str = ""
+    budget_s: float = 0.0
+    total_s: float = 0.0
+    original_s: float = 0.0  # length of the lectures it was built from
+    analysis_ids: list[str] = Field(default_factory=list)  # the inputs, in course order
+    parts: list[CoursePart] = Field(default_factory=list)
+    repeats: list[CourseRepeat] = Field(default_factory=list)
+    checklist: list[ChecklistItem] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    llm: LLMInfo | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    elapsed_s: float = 0.0
+
+
+class Course(BaseModel):
+    id: str
+    title: str
+    channel: str = ""
+    playlist_id: str = ""  # empty for a course grouped by hand
+    preferences: LearningPreferences
+    lectures: list[CourseLecture]
+    unavailable: int = 0  # playlist entries that are private or deleted
+    importing: bool = False  # still checking transcripts and queuing lectures
+    plan: CoursePlan | None = None  # the newest plan
+    plan_stale: bool = False  # lectures were analyzed (or changed) since the plan was built
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    @computed_field
+    @property
+    def url(self) -> str:
+        return f"https://www.youtube.com/playlist?list={self.playlist_id}" if self.playlist_id else ""

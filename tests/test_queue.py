@@ -218,3 +218,39 @@ def test_api_default_goal(service):
         assert r == {"updated": [queued], "already_analyzed": []}
         assert client.get("/api/v1/queue").json()["items"][0]["preferences"] == other
         assert client.get("/api/v1/preferences/default").json() == other  # saved as the default too
+
+
+def test_prepare_writes_notes_and_a_quiz_once(service):
+    analysis_id, _ = service.submit(URL, LearningPreferences())
+    service.run(analysis_id)
+    assert service.prepare(analysis_id) == ["notes", "quiz"]
+    assert [n.status for n in service.list_notes(analysis_id)] == [AnalysisStatus.DONE]
+    [study] = service.list_study(analysis_id)
+    assert study.status is AnalysisStatus.DONE and study.questions
+    # Already there: nothing new.
+    assert service.prepare(analysis_id) == []
+
+
+def test_prepare_stops_when_the_gpu_gets_busy(service):
+    analysis_id, _ = service.submit(URL, LearningPreferences())
+    service.run(analysis_id)
+    answers = iter(["", "The GPU is in use (90% busy)."])
+    assert service.prepare(analysis_id, gpu_busy=lambda: next(answers)) == ["notes"]
+    assert service.list_study(analysis_id) == []
+
+
+def test_queued_job_analyzes_then_prepares(service):
+    from curio_learn.api.app import _run_queued
+
+    analysis_id, _ = service.submit(URL, LearningPreferences(), queue=True)
+    w, _ = worker(service)
+    assert w.tick() == analysis_id
+    _run_queued(service, analysis_id, w)
+    assert service.get(analysis_id).status is AnalysisStatus.DONE
+    assert service.list_notes(analysis_id) and service.list_study(analysis_id)
+
+    other, _ = service.submit(URL2, LearningPreferences(), queue=True)
+    service.settings.queue_prepare = False
+    assert w.tick() == other
+    _run_queued(service, other, w)
+    assert service.get(other).status is AnalysisStatus.DONE and not service.list_notes(other)

@@ -2,15 +2,17 @@ import { useCallback, useEffect, useState } from 'react'
 import {
   ApiError,
   api,
+  type Course,
   type FlashcardDeck,
   type Preferences,
   type Profile,
   type QueueStatus,
   type RecentVideo,
 } from '../api'
+import { CourseList } from '../components/Courses'
 import { QueueList } from '../components/Queue'
 import { WatchMap } from '../components/WatchMap'
-import { PROFILES, duration, queueHours } from '../format'
+import { PROFILES, duration, isPlaylistLink, playlistOfVideo, queueHours } from '../format'
 import { linkProps, navigate } from '../router'
 
 const WATCH_TIMES = [10, 15, 20, 30, 45]
@@ -28,6 +30,7 @@ export function Home() {
   const [queue, setQueue] = useState<QueueStatus | null>(null)
   const [showMore, setShowMore] = useState(false)
   const [deck, setDeck] = useState<FlashcardDeck | null>(null)
+  const [courses, setCourses] = useState<Course[]>([])
   const prefs: Preferences = { profile, custom_objective: goal.trim(), target_minutes: minutes }
 
   const loadQueue = useCallback(() => {
@@ -37,6 +40,7 @@ export function Home() {
   useEffect(() => {
     api.recent().then(setRecent, () => setRecent([]))
     api.flashcards(undefined, 0).then(setDeck, () => {})
+    api.courses().then(setCourses, () => {})
     loadQueue()
     // Start from the goal used last time (saved on the server, so every device shares it).
     api.defaultPreferences().then((p) => {
@@ -58,11 +62,29 @@ export function Home() {
     return () => window.clearInterval(timer)
   }, [hasItems, loadQueue])
 
+  const playlist = isPlaylistLink(url)
+  const inPlaylist = !playlist && playlistOfVideo(url)
+
+  /** A playlist link becomes a course: its lectures are queued with this goal. */
+  async function addCourse() {
+    setBusy('now')
+    setError('')
+    try {
+      const { course_id } = await api.addCourse(url.trim(), prefs)
+      api.setDefaultPreferences(prefs).catch(() => {})
+      navigate(`/c/${course_id}`)
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Something went wrong reading the playlist.')
+      setBusy('')
+    }
+  }
+
   async function start(mode: 'now' | 'queue') {
     if (!url.trim()) {
       setError('Paste a YouTube link first.')
       return
     }
+    if (playlist) return addCourse()
     setBusy(mode)
     setError('')
     setQueued('')
@@ -115,7 +137,13 @@ export function Home() {
             aria-describedby={error ? 'url-error' : undefined}
           />
           <button type="submit" className="button-primary" disabled={!!busy}>
-            {busy === 'now' ? 'Fetching transcript…' : 'Find the best parts'}
+            {busy === 'now'
+              ? playlist
+                ? 'Reading the playlist…'
+                : 'Fetching transcript…'
+              : playlist
+                ? 'Add the course'
+                : 'Find the best parts'}
           </button>
         </div>
         {error && (
@@ -123,16 +151,32 @@ export function Home() {
             {error}
           </p>
         )}
-        <div className="analyze__later">
-          <button type="button" className="button-quiet" onClick={() => start('queue')} disabled={!!busy}>
-            {busy === 'queue' ? 'Adding…' : 'Queue for later'}
-          </button>
-          <span className="hint" aria-live="polite">
-            {queued ||
-              (queue &&
-                `Queued videos are analyzed ${queueHours(queue.window_start, queue.window_end)}, when the GPU is free.`)}
-          </span>
-        </div>
+        {playlist ? (
+          <p className="hint analyze__later">
+            This is a playlist. Curio adds it as a course: it queues the lectures not analyzed yet
+            {queue ? ` (analyzed ${queueHours(queue.window_start, queue.window_end)})` : ''} and builds one playlist
+            from the best parts of all of them.
+          </p>
+        ) : (
+          <div className="analyze__later">
+            <button type="button" className="button-quiet" onClick={() => start('queue')} disabled={!!busy}>
+              {busy === 'queue' ? 'Adding…' : 'Queue for later'}
+            </button>
+            <span className="hint" aria-live="polite">
+              {queued ||
+                (queue &&
+                  `Queued videos are analyzed ${queueHours(queue.window_start, queue.window_end)}, when the GPU is free.`)}
+            </span>
+          </div>
+        )}
+        {inPlaylist && (
+          <div className="analyze__playlist">
+            <span className="hint">This video is part of a playlist.</span>
+            <button type="button" className="button-quiet" onClick={addCourse} disabled={!!busy}>
+              Add the whole playlist as a course
+            </button>
+          </div>
+        )}
 
         <fieldset className="goal">
           <legend className="field-label">What are you watching for?</legend>
@@ -201,6 +245,8 @@ export function Home() {
       )}
 
       {queue && <QueueList queue={queue} onChange={loadQueue} goal={prefs} />}
+
+      <CourseList courses={courses} recent={recent ?? []} />
 
       <section className="recent" aria-labelledby="recent-heading">
         <h2 id="recent-heading">Recently analyzed</h2>

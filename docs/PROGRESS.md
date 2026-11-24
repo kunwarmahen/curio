@@ -12,7 +12,7 @@
 | LAN access | ✅ app and Podman container listen on all interfaces by default |
 | Phase 3: Interactive learning | 🟡 Ask the Video, quizzes and flashcards with spaced repetition, a remembered default goal, and segment completion tracking; saved custom playlists are not built |
 | Overnight queue | ✅ queue videos any time; analyzed 1–7 AM while the GPU is idle |
-| Phase 4: Multi-video intelligence | ⏳ not started |
+| Phase 4: Multi-video intelligence | 🟡 courses from YouTube playlists, one course playlist across lectures without repeats, and an "easy to miss" checklist; cross-course search and curricula are not built |
 
 ## Phase 1 log (2026-11-23)
 
@@ -33,7 +33,7 @@
 - `storage`: SQLAlchemy/SQLite (videos, transcripts, analyses, segments),
   cache keyed by video + preferences + model + pipeline version.
 - `service`, FastAPI (`/api/v1`), CLI. (A Streamlit UI was built first and then replaced; see the UI log below.)
-- 98 offline tests at the end of Phase 1 (105 with notes, 115 with Ask the Video, 121 with the overnight queue, 131 with quizzes, flashcards and the default goal) (ad detection and carving, sentence units and boundary refinement, URL parsing, normalization, segmentation repair, scoring and
+- 98 offline tests at the end of Phase 1 (105 with notes, 115 with Ask the Video, 121 with the overnight queue, 131 with quizzes, flashcards and the default goal, 134 with overnight notes and quizzes, 140 with courses) (ad detection and carving, sentence units and boundary refinement, URL parsing, normalization, segmentation repair, scoring and
   calibration, playlist and prerequisites, validation, LLM retry, request shapes and
   truncation guard, service caching, stale runs, API).
 
@@ -361,16 +361,47 @@ Checked on the CS329Z lecture (playlist, 26 min) with the local model:
   to know things I may have missed or I should be aware of" (watch time unchanged),
   by updating their rows: the running image predates the retarget endpoint.
 
+### Overnight notes and quizzes (2026-11-24)
+The six queued lectures all finished overnight (3:45–4:12 AM) with the technical
+goal. Now each queued job also writes the playlist notes and a quiz with flashcards
+after its analysis (`CURIO_QUEUE_PREPARE`, on by default), checking the GPU again
+before each. Also fixed: the GPU probe didn't list the quiz model (`CURIO_LLM_MODEL_STUDY`)
+as Curio's own. 3 new tests (134 in total).
+
+### Courses (2026-11-24)
+Phase 4's first piece (design in ARCHITECTURE §13). Paste a playlist link and Curio
+lists the lectures (no download), queues the ones not analyzed with your goal, and
+builds one course playlist under one time budget, leaving out repeats, with a
+checklist of what's easy to miss. Also: group analyzed videos into a course, watched
+parts per course, `curio course`, and a player overlay for videos whose owner turned
+embedding off.
+
+Tried on the six CS329Z lectures analyzed overnight plus Lecture 9 (analyzed with the
+general goal, so flagged), on a copy of the database:
+- 1 m 47 s, then 1 m 28 s after the fixes below. 19 parts, 1 h 38 min of 9 h 9 min.
+- Found the CS329Z playlist (12 entries: 10 lectures, 2 private) on the Stanford
+  Online channel; it's newest first, and the lecture-number check puts it in order.
+- Fixed after the first run: a 46 s optional clip (Generative Agents ablation,
+  without the section it builds on) filled leftover time; one wrong repeat (shared
+  point only); the plan said "Lecture 7" for Lecture 9 (labels now come from titles);
+  a left-out section was listed once per match.
+- Browser (1280 and 390 px): course map, cross-lecture playback, checklist links
+  play the cited moment, no horizontal scroll, no console errors.
+- Found while testing: Lecture 2 (`Vr1NzH8bT44`) doesn't allow embedding, so it
+  can't play on its video page either. The player now shows a link to that moment
+  on YouTube (YouTube errors 101/150).
+- 6 new tests (140 in total).
+
 ### Known gaps / next steps
 - The Anthropic provider is covered by unit tests with a mocked client only.
   No API key was available, so it has not been run against the live API yet.
 - Calibrate the scoring thresholds and the redundancy threshold on more videos
   (lectures, podcasts, tutorials with auto-captions).
-- Overnight queue, possible next steps: also write notes for queued videos, and
-  pause between videos when someone starts using the GPU mid-run (today a running
+- Overnight queue, possible next step: pause between videos when someone starts using the GPU mid-run (today a running
   analysis finishes).
 - Phase 3, still to build: saved custom playlists.
+- Courses: rebuild the course playlist automatically when the queue finishes a
+  course's last lecture; reorder lectures by hand; search across a course.
 - Quizzes: the right answer is still too often the longest option. Options: a
   code-side retry for questions with a clear gap, or asking for the options in a
   fixed length band from the start.
-- Overnight queue: could also write notes and a quiz for each queued video.
