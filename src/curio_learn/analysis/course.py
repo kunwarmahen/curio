@@ -325,6 +325,76 @@ def _for_course(item: Item, *, penalty: float = 0.0) -> ScoredSection:
     )
 
 
+def course_parts(
+    lectures: Sequence[Lecture],
+    items: Sequence[Item],
+    chosen: set[str],
+    related: dict[str, list[CourseRef]],
+    config: PlaylistConfig,
+) -> list[CoursePart]:
+    """The chosen items as playlist parts, in lecture order, merged within a lecture
+    like a video playlist. `related` maps an item key to sections of other lectures."""
+    parts: list[CoursePart] = []
+    for lec in lectures:
+        mine = sorted((it for it in items if it.lecture is lec and it.key in chosen), key=lambda it: it.section.start_s)
+        groups: list[list[Item]] = []
+        for it in mine:
+            if groups and it.section.start_s - groups[-1][-1].section.end_s <= config.merge_gap_s:
+                groups[-1].append(it)
+            else:
+                groups.append([it])
+        for n, group in enumerate(groups, 1):
+            seg = _segment([it.scored for it in group], n, True, lec.analysis.video.duration_s, config)
+            seen: set[tuple[str, str]] = set()
+            also = []
+            for it in group:
+                for ref in related.get(it.key, []):
+                    if (ref.video_id, ref.section_id) not in seen:
+                        seen.add((ref.video_id, ref.section_id))
+                        also.append(ref)
+            parts.append(
+                CoursePart(
+                    key=f"{lec.analysis.video.video_id}@{int(seg.start_s)}",
+                    lecture=lec.position,
+                    video_id=lec.analysis.video.video_id,
+                    analysis_id=lec.analysis.id,
+                    section_ids=seg.section_ids,
+                    title=seg.title,
+                    start_s=seg.start_s,
+                    end_s=seg.end_s,
+                    what_you_learn=seg.what_you_learn,
+                    why_valuable=seg.why_valuable,
+                    importance=seg.importance,
+                    score=seg.score,
+                    also_in=also[:3],
+                )
+            )
+    return parts
+
+
+def custom_course_parts(
+    lectures: Sequence[Lecture],
+    picked: set[tuple[str, str]],
+    pairs: Sequence[CoursePair],
+    config: PlaylistConfig,
+) -> list[CoursePart]:
+    """The learner's own course playlist: the sections they picked, as `(analysis id,
+    section id)`, made into parts the same way, with related sections from the pairs
+    the course playlist judged."""
+    lectures = sorted(lectures, key=lambda lec: lec.position)
+    items = [Item(f"L{lec.position}.{s.section.id}", lec, s) for lec in lectures for s in lec.analysis.sections]
+    chosen = {it.key for it in items if (it.lecture.analysis.id, it.section.id) in picked}
+    key_of = {(it.lecture.analysis.id, it.section.id): it.key for it in items}
+    related: dict[str, list[CourseRef]] = {}
+    for p in pairs:
+        if p.relation in ("overlap", "repeat"):
+            for x, y in ((p.a, p.b), (p.b, p.a)):
+                k = key_of.get((x.analysis_id, x.section_id))
+                if k:
+                    related.setdefault(k, []).append(y)
+    return course_parts(lectures, items, chosen, related, config)
+
+
 def build_course_plan(
     provider: LLMProvider,
     *,
@@ -382,41 +452,7 @@ def build_course_plan(
             related.setdefault(p.a.key, []).append(p.b.ref())
             related.setdefault(p.b.key, []).append(p.a.ref())
 
-    parts: list[CoursePart] = []
-    for lec in lectures:
-        mine = sorted((it for it in items if it.lecture is lec and it.key in chosen), key=lambda it: it.section.start_s)
-        groups: list[list[Item]] = []
-        for it in mine:
-            if groups and it.section.start_s - groups[-1][-1].section.end_s <= config.merge_gap_s:
-                groups[-1].append(it)
-            else:
-                groups.append([it])
-        for n, group in enumerate(groups, 1):
-            seg = _segment([it.scored for it in group], n, True, lec.analysis.video.duration_s, config)
-            seen: set[tuple[str, str]] = set()
-            also = []
-            for it in group:
-                for ref in related.get(it.key, []):
-                    if (ref.video_id, ref.section_id) not in seen:
-                        seen.add((ref.video_id, ref.section_id))
-                        also.append(ref)
-            parts.append(
-                CoursePart(
-                    key=f"{lec.analysis.video.video_id}@{int(seg.start_s)}",
-                    lecture=lec.position,
-                    video_id=lec.analysis.video.video_id,
-                    analysis_id=lec.analysis.id,
-                    section_ids=seg.section_ids,
-                    title=seg.title,
-                    start_s=seg.start_s,
-                    end_s=seg.end_s,
-                    what_you_learn=seg.what_you_learn,
-                    why_valuable=seg.why_valuable,
-                    importance=seg.importance,
-                    score=seg.score,
-                    also_in=also[:3],
-                )
-            )
+    parts = course_parts(lectures, items, chosen, related, config)
 
     skipped: list[CourseRepeat] = []
     listed: set[str] = set()

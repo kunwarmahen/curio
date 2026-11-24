@@ -11,8 +11,8 @@
 | Phase 2: Intelligent learning | ✅ learning profiles, custom objective, redundancy detection, skip recommendations, sentence-level boundaries, mid-roll ad removal and learning notes |
 | LAN access | ✅ app and Podman container listen on all interfaces by default |
 | Phase 3: Interactive learning | ✅ Ask the Video, quizzes and flashcards with spaced repetition, a remembered default goal, segment completion tracking, and saved custom playlists |
-| Overnight queue | ✅ queue videos any time; analyzed 1–7 AM while the GPU is idle |
-| Phase 4: Multi-video intelligence | 🟡 learning paths across courses, courses from YouTube playlists, one course playlist across lectures without repeats (every verdict shown), an "easy to miss" checklist, Ask the course, and a course quiz and flashcards; curricula across courses are not built |
+| Overnight queue | ✅ queue videos any time; analyzed 1–7 AM while the GPU is idle; a paused analysis resumes after its last finished step |
+| Phase 4: Multi-video intelligence | 🟡 learning paths across courses, courses from YouTube playlists, one course playlist across lectures without repeats (every verdict shown) that you can edit and reorder, an "easy to miss" checklist, Ask the course, and a course quiz and flashcards; curricula across courses are not built |
 
 ## Phase 1 log (2026-11-23)
 
@@ -457,12 +457,36 @@ general goal, so flagged), on a copy of the database:
   miss") in 6.5 minutes. The cards arrive about 9 s after the quiz shows as done.
 - 10 new tests (156 in total).
 
+### Paused analyses resume, lecture order, your own course playlist (2026-11-24)
+- **Resume after a pause.** Each LLM step of an analysis (outline, boundaries, ad
+  removal, evaluations) saves a checkpoint; a paused run picks up after the last
+  finished step (ARCHITECTURE §11). The checkpoint is checked against the models,
+  pipeline version, transcript and switches; a new goal keeps the outline and redoes
+  only the evaluations. Real run on a copy (Lecture 1, 70 min, general goal): paused
+  at 172 s during the evaluations; 105 s of finished steps were kept and the resumed
+  run took 80 s (184.6 s of work in all, 26 sections, no warnings). The 67 s of the
+  interrupted evaluation batch was redone: a pause inside a step still redoes that step.
+- **Lecture order.** Up and down arrows in the Lectures tab. The saved course playlist
+  follows at once, with no rebuild: its lecture numbers (and those in saved Ask the
+  course answers) are renumbered by video when read. Only a change in which lectures
+  are used makes the plan stale.
+- **Your own course playlist.** Edit the course playlist like a video's: tick sections
+  from any lecture (276 for CS329Z, Curio's 55 marked), switch between "Yours" and
+  "Curio's picks". Parts are merged and keyed as Curio's, so watched parts carry over
+  (34 of 35 kept their key after dropping one section and adding one). The course
+  quiz covers your playlist when you have one.
+- Browser (1280 and 390 px, copy of the database): editor, save, switching, moving a
+  lecture with the keyboard (focus stays on the moved lecture's arrow), the playlist
+  regrouped in the new order; no horizontal scroll, no console errors. Found: a skip
+  section added by hand was drawn hatched like a left-out repeat; now drawn as optional.
+- 8 new tests (164 in total).
+
 ### Known gaps / next steps
 - The Anthropic provider has not been run against the live API (no credentials
   here); `curio check-claude` checks it with one tiny request.
 - Calibrate the scoring thresholds and the redundancy threshold on more videos
   (lectures, podcasts, tutorials with auto-captions).
-- A paused analysis starts over; keeping finished steps would save a few minutes.
-- Courses: reorder lectures by hand. Repeat vs overlap verdicts vary run to run.
-- Custom playlists are per video; a course playlist can't be edited yet.
+- A pause inside a step redoes that step; saving each evaluation batch would keep more
+  (the evaluations were 80 of 185 s on Lecture 1).
+- Repeat vs overlap verdicts vary run to run.
 - The made-up-names check covers names, not plain-word claims or numbers.

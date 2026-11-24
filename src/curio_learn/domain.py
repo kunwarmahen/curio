@@ -579,12 +579,34 @@ class Course(BaseModel):
     importing: bool = False  # still checking transcripts and queuing lectures
     plan: CoursePlan | None = None  # the newest plan
     plan_stale: bool = False  # lectures were analyzed (or changed) since the plan was built
+    # The learner's own course playlist, when they saved one (None: Curio's picks).
+    custom_parts: list[CoursePart] | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
     @computed_field
     @property
     def url(self) -> str:
         return f"https://www.youtube.com/playlist?list={self.playlist_id}" if self.playlist_id else ""
+
+
+class CourseSectionChoice(BaseModel):
+    """A section the learner can put in their own course playlist."""
+
+    lecture: int
+    video_id: str
+    analysis_id: str
+    section_id: str
+    title: str
+    start_s: float
+    end_s: float
+    importance: Importance
+    curio_pick: bool = False  # in the course playlist Curio built
+    picked: bool = False  # in the playlist shown now (the learner's, or else Curio's)
+
+    @computed_field
+    @property
+    def duration_s(self) -> float:
+        return round(self.end_s - self.start_s, 2)
 
 
 class CourseAnswer(BaseModel):

@@ -405,7 +405,23 @@ export interface Course {
   importing: boolean
   plan: CoursePlan | null
   plan_stale: boolean
+  custom_parts?: CoursePart[] | null // the learner's own course playlist, when saved
   url: string
+}
+
+/** A section the learner can put in their own course playlist. */
+export interface CourseSectionChoice {
+  lecture: number
+  video_id: string
+  analysis_id: string
+  section_id: string
+  title: string
+  start_s: number
+  end_s: number
+  duration_s: number
+  importance: Importance
+  curio_pick: boolean
+  picked: boolean
 }
 
 export class ApiError extends Error {
@@ -548,6 +564,18 @@ export const api = {
     }),
   clearCourseConversation: (id: string) =>
     request<{ deleted: number }>(`/courses/${encodeURIComponent(id)}/questions`, { method: 'DELETE' }),
+  coursePlaylistSections: (id: string) =>
+    request<CourseSectionChoice[]>(`/courses/${encodeURIComponent(id)}/playlist-sections`),
+  setCoursePlaylist: (id: string, sections: string[] | null) =>
+    request<Course>(`/courses/${encodeURIComponent(id)}/custom-playlist`, {
+      method: 'PUT',
+      body: JSON.stringify({ sections }),
+    }),
+  reorderLectures: (id: string, videoIds: string[]) =>
+    request<Course>(`/courses/${encodeURIComponent(id)}/lectures/order`, {
+      method: 'PUT',
+      body: JSON.stringify({ video_ids: videoIds }),
+    }),
   courseWatched: (id: string) => request<string[]>(`/courses/${encodeURIComponent(id)}/watched`),
   setCourseWatched: (id: string, partKey: string, watched: boolean) =>
     request(`/courses/${encodeURIComponent(id)}/watched`, {

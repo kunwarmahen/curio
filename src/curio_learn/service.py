@@ -9,8 +9,10 @@ import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
 
+from pydantic import BaseModel
+
 from curio_learn.analysis.ask import answer_question
-from curio_learn.analysis.course import Lecture, build_course_plan
+from curio_learn.analysis.course import Lecture, build_course_plan, custom_course_parts
 from curio_learn.analysis.course_ask import LectureText, answer_course_question, course_passages
 from curio_learn.analysis.notes import generate_notes, scope_key, scope_sections, to_markdown
 from curio_learn.analysis.pipeline import AnalysisPipeline
@@ -28,6 +30,7 @@ from curio_learn.domain import (
     CourseLecture,
     CoursePlan,
     CoursePractice,
+    CourseSectionChoice,
     CourseStudy,
     DueCard,
     Flashcard,
@@ -229,20 +232,33 @@ class CurioService:
             report("Loading transcript")
             meta, transcript = self.ingest(pending.video.video_id)
             pipeline = AnalysisPipeline(self.settings, self.llm)
-            result = pipeline.run(meta, transcript, pending.preferences, analysis_id=analysis_id, progress=report)
+            result = pipeline.run(
+                meta,
+                transcript,
+                pending.preferences,
+                analysis_id=analysis_id,
+                progress=report,
+                checkpoint=self.repo.get_checkpoint(analysis_id),
+                save_checkpoint=lambda data: self.repo.save_checkpoint(analysis_id, data),
+                version=self.llm_key(),
+            )
             result.created_at = pending.created_at
             self.repo.save_result(result)
+            self.repo.delete_checkpoint(analysis_id)
             return result
         except Paused as exc:
+            # The finished steps stay in the checkpoint; the next run picks up there.
             log.info("[%s] Paused, back in the queue: %s", analysis_id, exc.message)
             self.repo.requeue(analysis_id, f"Paused: {exc.message}")
             raise
         except CurioError as exc:
             self.repo.update_status(analysis_id, AnalysisStatus.FAILED, error=exc.message)
+            self.repo.delete_checkpoint(analysis_id)
             raise
         except Exception as exc:
             log.exception("Analysis %s failed", analysis_id)
             self.repo.update_status(analysis_id, AnalysisStatus.FAILED, error=f"Unexpected error: {exc}")
+            self.repo.delete_checkpoint(analysis_id)
             raise
 
     def analyze(
@@ -873,14 +889,26 @@ class CurioService:
             out.append(item)
         return out
 
-    def course(self, course_id: str) -> Course | None:
+    def course(self, course_id: str, *, custom: bool = True) -> Course | None:
+        """A course with its lectures' states and newest plan. With `custom`, also the
+        learner's own course playlist, if they saved one."""
         data = self.repo.get_course(course_id)
         if data is None:
             return None
         lectures = self._lectures(data)
         plan = self.repo.latest_course_plan(course_id)
         usable = [lec.analysis_id for lec in lectures if lec.analysis_id]
-        stale = plan is not None and plan.status == AnalysisStatus.DONE and plan.analysis_ids != usable
+        if plan is not None:
+            # Lectures may have been reordered since the plan was built: number its
+            # references by the current order and play its parts in that order.
+            plan = _renumber(plan, {lec.video_id: lec.position for lec in lectures})
+            plan.parts.sort(key=lambda p: p.lecture)  # stable: keeps the order within a lecture
+        stale = plan is not None and plan.status == AnalysisStatus.DONE and set(plan.analysis_ids) != set(usable)
+        custom_parts = None
+        if custom and plan is not None and plan.status == AnalysisStatus.DONE:
+            picked = self.repo.course_custom_playlist(course_id)
+            if picked is not None:
+                custom_parts = self._custom_course_parts(lectures, plan, picked) or None
         return Course(
             id=data["id"],
             title=data["title"],
@@ -892,11 +920,92 @@ class CurioService:
             importing=data["importing"],
             plan=plan,
             plan_stale=stale,
+            custom_parts=custom_parts,
             created_at=data["created_at"],
         )
 
     def courses(self) -> list[Course]:
-        return [c for c in (self.course(d["id"]) for d in self.repo.list_courses()) if c is not None]
+        listed = (self.course(d["id"], custom=False) for d in self.repo.list_courses())
+        return [c for c in listed if c is not None]
+
+    # --------------------------------------------------- editing a course
+
+    def reorder_course(self, course_id: str, video_ids: list[str]) -> Course:
+        """Put the lectures in this order (every lecture, each once). The course
+        playlist follows at once; building it again also redoes the order-dependent
+        choices (which of two repeats to keep)."""
+        data = self.repo.get_course(course_id)
+        if data is None:
+            raise KeyError(course_id)
+        by_id = {x["video_id"]: x for x in data["lectures"]}
+        if sorted(video_ids) != sorted(by_id) or len(set(video_ids)) != len(video_ids):
+            raise AnalysisError("List every lecture of the course once.")
+        self.repo.update_course(course_id, lectures=[by_id[v] for v in video_ids])
+        return self.course(course_id)
+
+    def _course_lectures(self, lectures: list[CourseLecture]) -> list[Lecture]:
+        out = []
+        for lec in lectures:
+            analysis = self.repo.get_analysis(lec.analysis_id) if lec.analysis_id else None
+            if analysis is not None and analysis.status == AnalysisStatus.DONE:
+                out.append(Lecture(position=lec.position, analysis=analysis, units=[], label=lec.label))
+        return out
+
+    def _custom_course_parts(self, lectures: list[CourseLecture], plan: CoursePlan, picked: list[str]) -> list:
+        """The learner's parts from the lectures the course uses now; sections of an
+        analysis the course no longer uses are left out."""
+        refs = {tuple(x.split(":", 1)) for x in picked if ":" in x}
+        return custom_course_parts(
+            self._course_lectures(lectures), refs, plan.pairs, PlaylistConfig(merge_gap_s=self.settings.merge_gap_s)
+        )
+
+    def course_playlist_sections(self, course_id: str) -> list[CourseSectionChoice]:
+        """Every section of the analyzed lectures, for editing the course playlist:
+        which ones Curio picked and which are in the playlist shown now."""
+        course = self.course(course_id)
+        if course is None:
+            raise KeyError(course_id)
+        plan = course.plan
+        if plan is None or plan.status != AnalysisStatus.DONE:
+            raise AnalysisError("Build the course playlist first, then edit it.")
+        curio = {(p.analysis_id, sid) for p in plan.parts for sid in p.section_ids}
+        shown = {(p.analysis_id, sid) for p in (course.custom_parts or plan.parts) for sid in p.section_ids}
+        out = []
+        for lec in self._course_lectures(course.lectures):
+            for s in lec.analysis.sections:
+                key = (lec.analysis.id, s.section.id)
+                out.append(
+                    CourseSectionChoice(
+                        lecture=lec.position,
+                        video_id=lec.analysis.video.video_id,
+                        analysis_id=lec.analysis.id,
+                        section_id=s.section.id,
+                        title=s.section.title,
+                        start_s=s.section.start_s,
+                        end_s=s.section.end_s,
+                        importance=s.importance,
+                        curio_pick=key in curio,
+                        picked=key in shown,
+                    )
+                )
+        return out
+
+    def set_course_playlist(self, course_id: str, sections: list[str] | None) -> Course:
+        """Save the learner's course playlist, as "analysis id:section id" strings;
+        None (or exactly Curio's picks) goes back to Curio's."""
+        choices = self.course_playlist_sections(course_id)
+        if sections is not None:
+            known = {f"{c.analysis_id}:{c.section_id}" for c in choices}
+            unknown = set(sections) - known
+            if unknown:
+                raise AnalysisError(f"Unknown sections: {', '.join(sorted(unknown))}.")
+            if not sections:
+                raise AnalysisError("Keep at least one part in your playlist.")
+            ordered = [k for k in (f"{c.analysis_id}:{c.section_id}" for c in choices) if k in set(sections)]
+            curio = [f"{c.analysis_id}:{c.section_id}" for c in choices if c.curio_pick]
+            sections = None if ordered == curio else ordered
+        self.repo.set_course_custom_playlist(course_id, sections)
+        return self.course(course_id)
 
     def delete_course(self, course_id: str) -> bool:
         return self.repo.delete_course(course_id)
@@ -1132,17 +1241,24 @@ class CurioService:
         return answer
 
     def course_conversation(self, course_id: str) -> list[CourseAnswer]:
-        return self.repo.list_course_answers(course_id)
+        answers = self.repo.list_course_answers(course_id)
+        data = self.repo.get_course(course_id)
+        if data is None:
+            return answers
+        positions = {x["video_id"]: n for n, x in enumerate(data["lectures"], 1)}
+        return [_renumber(a, positions) for a in answers]
 
     def clear_course_conversation(self, course_id: str) -> int:
         return self.repo.clear_course_answers(course_id)
 
     # ------------------------------------------------- course quiz and flashcards
 
-    def _plan_sections(self, plan: CoursePlan) -> dict[str, list[str]]:
-        """The sections of each analysis in a course playlist, in order."""
+    def _plan_sections(self, course: Course) -> dict[str, list[str]]:
+        """The sections of each analysis in the course playlist (the learner's own when
+        they saved one), in order."""
+        plan = course.plan
         out: dict[str, list[str]] = {aid: [] for aid in plan.analysis_ids}
-        for part in plan.parts:
+        for part in course.custom_parts or plan.parts:
             for sid in part.section_ids:
                 if sid not in out.setdefault(part.analysis_id, []):
                     out[part.analysis_id].append(sid)
@@ -1159,7 +1275,7 @@ class CurioService:
         if not newest:
             return CoursePractice(course_id=course_id)
         plan = course.plan if course.plan and course.plan.status == AnalysisStatus.DONE else None
-        wanted = self._plan_sections(plan) if plan else {}
+        wanted = self._plan_sections(course) if plan else {}
         sets = [
             CourseStudy(lecture=positions.get(aid, 0), study=st)
             for aid, st in newest.items()
@@ -1194,7 +1310,7 @@ class CurioService:
         if plan is None or plan.status != AnalysisStatus.DONE:
             raise AnalysisError("Build the course playlist first; the quiz covers its parts.")
         to_run = []
-        for aid, sections in self._plan_sections(plan).items():
+        for aid, sections in self._plan_sections(course).items():
             study_id, needs_run = self.submit_study(aid, NotesScope.COURSE, sections, force=force, course_id=course_id)
             if needs_run:
                 to_run.append(study_id)
@@ -1252,3 +1368,22 @@ class CurioService:
 
     def set_course_watched(self, course_id: str, part_key: str, watched: bool) -> None:
         self.repo.set_course_watched(course_id, part_key, watched)
+
+
+def _renumber[M: BaseModel](model: M, positions: dict[str, int]) -> M:
+    """Renumber every lecture reference (`lecture` next to `video_id`) in a saved plan or
+    answer by the course's current lecture order."""
+
+    def walk(x) -> None:
+        if isinstance(x, dict):
+            if "lecture" in x and x.get("video_id") in positions:
+                x["lecture"] = positions[x["video_id"]]
+            for v in x.values():
+                walk(v)
+        elif isinstance(x, list):
+            for v in x:
+                walk(v)
+
+    data = model.model_dump(mode="json")
+    walk(data)
+    return type(model).model_validate(data)

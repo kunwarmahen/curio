@@ -84,7 +84,7 @@ curio/
 │   │   ├── study.py          quizzes and flashcards, spaced-repetition schedule
 │   │   ├── course.py         course playlist across lectures: repeats, checklist
 │   │   ├── course_ask.py     Ask the course: search across lectures, cited answers
-│   │   └── pipeline.py       orchestrates the steps, reports progress
+│   │   └── pipeline.py       orchestrates the steps, reports progress, saves step checkpoints
 │   ├── storage/
 │   │   ├── orm.py            SQLAlchemy tables
 │   │   └── repository.py     persistence API (cache lookup, recent videos)
@@ -191,7 +191,7 @@ invent a timestamp: code converts the numbers to the original cue times.
 | `POST` | `/courses` | `{url, preferences}` → `202 {course_id}`: a course from a YouTube playlist (the same playlist and goal reuse the course). Its lectures are checked and queued in a background thread beside the job worker |
 | `POST` | `/courses/combine` | `{title, course_ids}` → `201 {course_id}`: a learning path, the courses' lectures in that order without duplicates, the first course's goal |
 | `POST` | `/courses/group` | `{title, analysis_ids}` → `201 {course_id}`: a course of analyzed videos, in upload order |
-| `GET`  | `/courses` / `/courses/{id}` | `Course`: lectures with their state (`ready`, `other_goal`, `queued`, `analyzing`, `failed`, `missing`), the newest `plan`, `plan_stale` |
+| `GET`  | `/courses` / `/courses/{id}` | `Course`: lectures with their state (`ready`, `other_goal`, `queued`, `analyzing`, `failed`, `missing`), the newest `plan`, `plan_stale`, and `custom_parts` (the learner's own course playlist, or `null`; only on `/courses/{id}`) |
 | `DELETE` | `/courses/{id}` | delete a course (its analyses stay) |
 | `POST` | `/courses/{id}/refresh` | read the playlist again and queue new lectures |
 | `POST` | `/courses/{id}/plan` | `{minutes?, force?}` → `202 {plan_id, status}`: build the course playlist from the lectures analyzed so far, on the job worker |
@@ -200,6 +200,9 @@ invent a timestamp: code converts the numbers to the original cue times.
 | `POST` | `/courses/{id}/practice` | `{force?}` → `202 CoursePractice`: a quiz and flashcards for every lecture of the course playlist, on the job worker; sets with the same sections are reused unless `force` |
 | `GET`  | `/courses/{id}/practice` | `CoursePractice {sets[{lecture, study}], status, progress, stale, questions, cards}` |
 | `GET`  | `/courses/{id}/watched` / `PUT` | watched course parts (`PUT` body `{part_key, watched}`) |
+| `PUT`  | `/courses/{id}/lectures/order` | `{video_ids}` (every lecture once) → `Course` in the new order; the saved plan is renumbered, not rebuilt |
+| `GET`  | `/courses/{id}/playlist-sections` | `CourseSectionChoice[]`: every section of the lectures the course uses, with `curio_pick` and `picked` (in the playlist shown now); needs a built plan |
+| `PUT`  | `/courses/{id}/custom-playlist` | `{sections: ["<analysis id>:<section id>", …]}` → `Course` with `custom_parts`; `null` (or exactly Curio's picks) goes back to Curio's |
 | `POST` | `/queue/preferences` | `{preferences, analysis_ids?, save_default?}` → `{updated[], already_analyzed[]}`: give queued videos a goal (all queued when no ids); a video already analyzed with that goal leaves the queue |
 
 Errors use `{"detail": {"code": "...", "message": "..."}}` with codes
@@ -383,7 +386,20 @@ During a queued analysis, `CurioService.run(should_pause=...)` asks the GPU prob
 before each pipeline step, at most once a minute (`_every(60, worker.gpu_busy)`; the
 probe takes 5 s, and the queue checked just before starting). If something else is
 using the GPU the run raises `Paused` and goes back to `queued` with the reason as its
-progress; it starts over when the GPU is free (partial work isn't kept).
+progress, and picks up where it stopped when the GPU is free.
+
+**Checkpoints.** After each LLM step (outline, sentence-level boundaries, ad removal,
+evaluations) the pipeline saves the state so far to `analysis_checkpoints` (one row per
+analysis: the step, the sections, repairs and warnings, the outline's overview and
+concepts, the evaluations, and the seconds spent). A run that finds a checkpoint skips
+the steps it covers, so a pause costs at most the step it interrupted. A checkpoint is
+used only when its key matches: the pipeline version, provider and models, a hash of the
+transcript blocks, and the boundary and ad switches. The evaluations also need the same
+learning goal, since a queued video's goal can change while it waits; with a new goal
+the outline and boundaries are kept and only the evaluations are redone. The checkpoint
+is deleted when the analysis finishes or fails, or when it's taken out of the queue. A
+pause inside a step (between outline windows or evaluation batches) still redoes that
+step.
 The worker remembers the last reason it waited, which `GET /queue` reports.
 
 **Preparing study material.** With `CURIO_QUEUE_PREPARE` (default on), the queued job
@@ -527,6 +543,24 @@ different, 0 repeats. The pairs judged repeats before (context engineering in Le
 "adds" (KV-cache invalidation; skills vs tools). The line between repeat and overlap
 is a judgment call that varies run to run; overlapping sections both stay eligible,
 which is the safer error.
+
+**Lecture order.** `reorder_course` stores a new order (every lecture once). A saved plan
+isn't rebuilt: every `lecture` number in it (parts, references, pairs, checklist) and in
+saved Ask the course answers is renumbered by `video_id` when read, and its parts are
+played in the new lecture order, so labels and watched parts stay right. A plan goes
+stale only when the set of lectures changes, not their order. Building it again redoes
+what depends on order (which half of a repeat is the earlier one, the checklist).
+
+**Your own course playlist.** Like a video's custom playlist: the learner picks sections
+from every section of the lectures the course uses (`course_playlist_sections`, marking
+Curio's picks), stored in `course_custom_playlists` as `<analysis id>:<section id>`.
+Exactly Curio's picks, or none, means Curio's. On read, `custom_course_parts` turns them
+into parts the same way the plan does (merged within a lecture, `also_in` from the
+plan's judged pairs), so a part the learner kept has the same `<video id>@<start>` key and
+its watched state. Sections of an analysis the course no longer uses drop out. The
+course quiz and flashcards cover the learner's playlist when there is one (it goes stale
+when they edit it). The course map and playlist switch between "Yours" and "Curio's
+picks"; a skip section the learner added is drawn as optional.
 
 **Learning paths.** `combine_courses` makes a course from several courses' lectures in
 order; everything above then works across courses.

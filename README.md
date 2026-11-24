@@ -125,7 +125,9 @@ the GPU is idle: under 20% utilization (the median of five nvidia-smi readings, 
 desktop's brief spikes don't count) and no Ollama model loaded by another program.
 Before each video it checks again, so if you start using the GPU at night the queue
 waits; a video being analyzed checks again about once a minute and, if something else
-is using the GPU, pauses and goes back into the queue (it starts over later). After each video it also writes the
+is using the GPU, pauses and goes back into the queue. When it runs again it picks up
+after the last step it finished (outline, boundaries, ad check, evaluations), so a
+pause costs at most the step it was in. After each video it also writes the
 notes and a quiz with flashcards for its playlist, so they're ready in the morning
 (`CURIO_QUEUE_PREPARE=false` turns this off; if the GPU gets busy, they're skipped
 and you can write them from the video's page). The Queue page (in the menu) lists the
@@ -164,8 +166,15 @@ linked to the moment in its lecture) and flashcards for each section and each
 own deck in your daily review, beside each lecture's; about 7 minutes for 7
 lectures with the local model); **Ask the course**; **Repeats**: every pair of
 similar sections the model compared, as left out, other repeats, or overlaps (each
-adds something), with why; and **Lectures**, with each lecture's state, the length
-of the course playlist, and building it again.
+adds something), with why; and **Lectures**, with each lecture's state, arrows to
+put the lectures in your own order, the length of the course playlist, and building
+it again. Reordering takes effect at once without a rebuild; building again also
+redoes which of two repeated sections is kept.
+
+**Edit the course playlist** (beside the course playlist) lists every section of
+every analyzed lecture, with Curio's picks marked: tick the ones you want and save.
+You can switch between yours and Curio's picks, or go back to Curio's. Parts you
+kept stay watched, and the course quiz covers your playlist.
 
 **Learning paths.** With two or more courses, the Courses page can combine them
 (in the order you tick them) into a learning path: a course of its own with all their

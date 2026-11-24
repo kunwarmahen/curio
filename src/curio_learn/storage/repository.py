@@ -25,9 +25,11 @@ from curio_learn.domain import (
     VideoMetadata,
 )
 from curio_learn.storage.orm import (
+    AnalysisCheckpointRow,
     AnalysisRow,
     Base,
     CardStateRow,
+    CourseCustomPlaylistRow,
     CoursePlanRow,
     CourseQuestionRow,
     CourseRow,
@@ -299,8 +301,25 @@ class Repository:
             )
             return result.rowcount == 1
 
+    def get_checkpoint(self, analysis_id: str) -> dict | None:
+        with self.session() as db:
+            row = db.get(AnalysisCheckpointRow, analysis_id)
+            return dict(row.data) if row else None
+
+    def save_checkpoint(self, analysis_id: str, data: dict) -> None:
+        with self.session() as db, db.begin():
+            row = db.get(AnalysisCheckpointRow, analysis_id)
+            if row is None:
+                db.add(AnalysisCheckpointRow(analysis_id=analysis_id, step=data.get("step", ""), data=data))
+            else:
+                row.step, row.data = data.get("step", ""), data
+
+    def delete_checkpoint(self, analysis_id: str) -> None:
+        with self.session() as db, db.begin():
+            db.execute(delete(AnalysisCheckpointRow).where(AnalysisCheckpointRow.analysis_id == analysis_id))
+
     def requeue(self, analysis_id: str, progress: str) -> None:
-        """Put a paused analysis back in the queue (it starts over when it runs again)."""
+        """Put a paused analysis back in the queue (it resumes from its checkpoint)."""
         with self.session() as db, db.begin():
             row = db.get(AnalysisRow, analysis_id)
             if row is not None:
@@ -327,6 +346,7 @@ class Repository:
             row = db.get(AnalysisRow, analysis_id)
             if row is None or row.status != AnalysisStatus.QUEUED.value:
                 return False
+            db.execute(delete(AnalysisCheckpointRow).where(AnalysisCheckpointRow.analysis_id == analysis_id))
             db.delete(row)
             return True
 
@@ -364,6 +384,8 @@ class Repository:
             db.execute(update(CourseRow).where(CourseRow.importing.is_(True)).values(importing=False))
             for row in stale:
                 row.status, row.error = AnalysisStatus.FAILED.value, "Interrupted: the process running it stopped."
+            if gone := [r.id for r in rows if r in stale]:
+                db.execute(delete(AnalysisCheckpointRow).where(AnalysisCheckpointRow.analysis_id.in_(gone)))
             return len(stale)
 
     def recent(self, limit: int = 10) -> list[RecentVideo]:
@@ -800,6 +822,7 @@ class Repository:
             db.execute(delete(CourseWatchedRow).where(CourseWatchedRow.course_id == course_id))
             db.execute(delete(CourseQuestionRow).where(CourseQuestionRow.course_id == course_id))
             db.execute(delete(CoursePlanRow).where(CoursePlanRow.course_id == course_id))
+            db.execute(delete(CourseCustomPlaylistRow).where(CourseCustomPlaylistRow.course_id == course_id))
             return db.execute(delete(CourseRow).where(CourseRow.id == course_id)).rowcount > 0
 
     def analyses_for_videos(self, video_ids: list[str]) -> list[dict]:
@@ -971,3 +994,19 @@ class Repository:
                 db.add(CustomPlaylistRow(analysis_id=analysis_id, segment_ids=segment_ids))
             else:
                 row.segment_ids = segment_ids
+
+    def course_custom_playlist(self, course_id: str) -> list[str] | None:
+        with self.session() as db:
+            row = db.get(CourseCustomPlaylistRow, course_id)
+            return list(row.sections) if row else None
+
+    def set_course_custom_playlist(self, course_id: str, sections: list[str] | None) -> None:
+        with self.session() as db, db.begin():
+            row = db.get(CourseCustomPlaylistRow, course_id)
+            if sections is None:
+                if row is not None:
+                    db.delete(row)
+            elif row is None:
+                db.add(CourseCustomPlaylistRow(course_id=course_id, sections=sections))
+            else:
+                row.sections = sections

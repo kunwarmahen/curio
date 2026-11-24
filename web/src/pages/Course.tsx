@@ -8,6 +8,7 @@ import {
   type CoursePlan,
   type CourseRef,
   type CoursePractice,
+  type CourseSectionChoice,
   type Citation,
 } from '../api'
 import { AskThread } from '../components/Ask'
@@ -203,6 +204,7 @@ function PlanSection({ course, onChange }: { course: Course; onChange: () => voi
           <CoursePlayer
             course={course}
             plan={plan}
+            onChange={onChange}
             lectures={
               <>
                 <Lectures course={course} onChange={onChange} inTab />
@@ -223,8 +225,14 @@ interface Now {
 
 type CourseTab = 'miss' | 'practice' | 'ask' | 'repeats' | 'lectures'
 
-function CoursePlayer({ course, plan, lectures: lecturesTab }: { course: Course; plan: CoursePlan; lectures: React.ReactNode }) {
-  const parts = plan.parts
+function CoursePlayer(props: { course: Course; plan: CoursePlan; lectures: React.ReactNode; onChange: () => void }) {
+  const { course, plan, lectures: lecturesTab } = props
+  // The learner's own course playlist, when they saved one; `useMine` switches between it and Curio's.
+  const [useMine, setUseMine] = useState(true)
+  const [editing, setEditing] = useState(false)
+  const custom = course.custom_parts ?? null
+  const parts = custom && useMine ? custom : plan.parts
+  const total = parts.reduce((n, p) => n + p.duration_s, 0)
   const [tab, setTab] = useState<CourseTab>(plan.checklist.length ? 'miss' : 'ask')
   const repeatCount = plan.pairs ? plan.pairs.filter((p) => p.relation === 'repeat').length : plan.repeats.length
   const lectures = useMemo(() => new Map(course.lectures.map((l) => [l.position, l])), [course.lectures])
@@ -321,14 +329,15 @@ function CoursePlayer({ course, plan, lectures: lecturesTab }: { course: Course;
       <CourseMap
         course={course}
         plan={plan}
+        parts={parts}
         activeKey={clip?.key ?? null}
         playing={clip ? { video_id: clip.video_id ?? '', t: time } : null}
         onPlay={play}
         onPlayRef={playRef}
       />
       <p className="summary">
-        Watch <strong>{duration(plan.total_s)}</strong> instead of {duration(plan.original_s)}, from{' '}
-        {lecturesUsed} lectures.
+        Watch <strong>{duration(total)}</strong> instead of {duration(plan.original_s)}, from{' '}
+        {new Set(parts.map((p) => p.analysis_id)).size || lecturesUsed} lectures.
         {plan.repeats.length > 0 &&
           ` ${plan.repeats.length} part${plan.repeats.length === 1 ? '' : 's'} taught again in another lecture ${plan.repeats.length === 1 ? 'is' : 'are'} left out.`}
       </p>
@@ -422,8 +431,38 @@ function CoursePlayer({ course, plan, lectures: lecturesTab }: { course: Course;
         <aside className="playlist" aria-labelledby="course-playlist-heading">
           <h2 id="course-playlist-heading">Course playlist</h2>
           <p className="muted">
-            {parts.length} parts, {duration(plan.total_s)}. {done} of {parts.length} watched.
+            {parts.length} parts, {duration(total)}. {done} of {parts.length} watched.
           </p>
+          <div className="playlist__tools">
+            {custom && (
+              <fieldset className="segmented playlist__which">
+                <legend className="visually-hidden">Which playlist</legend>
+                <label className="segmented__option">
+                  <input type="radio" name="which-course-playlist" checked={useMine} onChange={() => setUseMine(true)} />
+                  <span>Yours</span>
+                </label>
+                <label className="segmented__option">
+                  <input type="radio" name="which-course-playlist" checked={!useMine} onChange={() => setUseMine(false)} />
+                  <span>Curio's picks</span>
+                </label>
+              </fieldset>
+            )}
+            <button type="button" className="button-quiet" onClick={() => setEditing((e) => !e)} aria-expanded={editing}>
+              {editing ? 'Close' : 'Edit the playlist'}
+            </button>
+          </div>
+          {editing && (
+            <CoursePlaylistEditor
+              course={course}
+              label={label}
+              showing={custom && useMine ? 'yours' : 'curio'}
+              onSaved={() => {
+                setUseMine(true)
+                setEditing(false)
+                props.onChange()
+              }}
+            />
+          )}
           {byLecture.map((g) => (
             <div key={g.lecture} className="course__group">
               <h3 className="course__group-title">
@@ -435,7 +474,7 @@ function CoursePlayer({ course, plan, lectures: lecturesTab }: { course: Course;
                   <li key={p.key}>
                     <button
                       type="button"
-                      className={`segment segment--${p.importance}${p.key === now.part?.key ? ' segment--active' : ''}`}
+                      className={`segment segment--${shade(p)}${p.key === now.part?.key ? ' segment--active' : ''}`}
                       onClick={() => play(p)}
                       aria-current={p.key === now.part?.key ? 'true' : undefined}
                     >
@@ -590,7 +629,7 @@ function CoursePracticePanel(props: { course: Course; label: (n: number) => stri
 
   if (!practice) return <p className="muted">Loading…</p>
   const done = practice.sets.filter((x) => x.study.status === 'done' && x.study.questions.length)
-  const parts = course.plan?.parts.length ?? 0
+  const parts = (course.custom_parts ?? course.plan?.parts)?.length ?? 0
 
   return (
     <section className="course__section practice" aria-labelledby="practice-heading">
@@ -605,7 +644,7 @@ function CoursePracticePanel(props: { course: Course; label: (n: number) => stri
       {practice.status === null && (
         <div className="notes__start">
           <p className="muted">
-            A quiz on the {parts} parts of the course playlist, one question for each section, and a flashcard for each
+            A quiz on the {parts} parts of {course.custom_parts ? 'your' : 'the'} course playlist, one question for each section, and a flashcard for each
             section and for each point under Easy to miss. The cards join your review deck. With a local model this
             takes about half a minute per lecture.
           </p>
@@ -851,11 +890,139 @@ function RefButton({ ref_, label, onPlay }: { ref_: CourseRef; label: string; on
   )
 }
 
+/** Pick the sections of your own course playlist from every section of the analyzed lectures. */
+function CoursePlaylistEditor(props: {
+  course: Course
+  label: (n: number) => string
+  showing: 'yours' | 'curio'
+  onSaved: () => void
+}) {
+  const { course, label, showing } = props
+  const [choices, setChoices] = useState<CourseSectionChoice[] | null>(null)
+  const [picked, setPicked] = useState<Set<string>>(new Set())
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+
+  useEffect(() => {
+    api.coursePlaylistSections(course.id).then(
+      (cs) => {
+        setChoices(cs)
+        // Start from the playlist on screen: Curio's picks when that is what's showing.
+        setPicked(new Set(cs.filter((c) => (showing === 'curio' ? c.curio_pick : c.picked)).map(choiceKey)))
+      },
+      (e) => setErr(e instanceof ApiError ? e.message : 'Could not load the sections.'),
+    )
+  }, [course.id, showing])
+
+  const save = async (sections: string[] | null) => {
+    setBusy(true)
+    setErr('')
+    try {
+      await api.setCoursePlaylist(course.id, sections)
+      props.onSaved()
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : 'Could not save the playlist.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (!choices)
+    return err ? (
+      <p className="form-error" role="alert">
+        {err}
+      </p>
+    ) : (
+      <p className="muted">Loading the sections…</p>
+    )
+
+  const groups: { lecture: number; items: CourseSectionChoice[] }[] = []
+  for (const c of choices) {
+    if (groups.at(-1)?.lecture !== c.lecture) groups.push({ lecture: c.lecture, items: [] })
+    groups.at(-1)!.items.push(c)
+  }
+  const total = choices.filter((c) => picked.has(choiceKey(c))).reduce((n, c) => n + c.duration_s, 0)
+  const toggle = (key: string, on: boolean) =>
+    setPicked((prev) => {
+      const next = new Set(prev)
+      if (on) next.add(key)
+      else next.delete(key)
+      return next
+    })
+
+  return (
+    <div className="editor">
+      <p className="hint">
+        Tick the sections you want to watch, from any lecture. Curio's picks are marked; sections next to each other
+        play as one part.
+      </p>
+      <div className="editor__groups">
+        {groups.map((g) => (
+          <div key={g.lecture} className="editor__group">
+            <h3 className="editor__group-title">
+              {label(g.lecture)}
+              <span className="muted"> {shortTitle(course.lectures.find((l) => l.position === g.lecture)?.title ?? '')}</span>
+            </h3>
+            <ul className="editor__list">
+              {g.items.map((c) => (
+                <li key={choiceKey(c)}>
+                  <label className="editor__row">
+                    <input
+                      type="checkbox"
+                      checked={picked.has(choiceKey(c))}
+                      onChange={(e) => toggle(choiceKey(c), e.target.checked)}
+                    />
+                    <span className="editor__time">{clock(c.start_s)}</span>
+                    <span>
+                      {c.title}
+                      <span className="muted">
+                        {' '}
+                        {duration(c.duration_s)}
+                        {c.curio_pick ? ", Curio's pick" : c.importance === 'skip' ? ', marked skip' : ''}
+                      </span>
+                    </span>
+                  </label>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
+      </div>
+      {err && (
+        <p className="form-error" role="alert">
+          {err}
+        </p>
+      )}
+      <div className="editor__actions">
+        <button type="button" className="button-primary" disabled={busy || picked.size === 0} onClick={() => save([...picked])}>
+          Save my playlist ({duration(total)})
+        </button>
+        {course.custom_parts && (
+          <button type="button" className="button-quiet" disabled={busy} onClick={() => save(null)}>
+            Go back to Curio's picks
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/** A part's colour. A section Curio marked skip that the learner added to their own
+ *  playlist is drawn like an optional part: hatching means "left out". */
+function shade(p: CoursePart): CoursePart['importance'] {
+  return p.importance === 'skip' ? 'optional' : p.importance
+}
+
+function choiceKey(c: CourseSectionChoice): string {
+  return `${c.analysis_id}:${c.section_id}`
+}
+
 /** Every lecture as one line: the parts in the course playlist highlighted, the parts
  *  left out as repeats hatched, and the red line where playback is. */
 function CourseMap(props: {
   course: Course
   plan: CoursePlan
+  parts: CoursePart[] // the playlist shown: the learner's own or Curio's
   activeKey: string | null
   playing: { video_id: string; t: number | null } | null
   onPlay: (p: CoursePart) => void
@@ -869,8 +1036,9 @@ function CourseMap(props: {
       {rows.map((lec) => {
         const len = lec.duration_s || 1
         const pct = (s: number) => `${(Math.min(Math.max(s, 0), len) / len) * 100}%`
-        const parts = plan.parts.filter((p) => p.video_id === lec.video_id)
-        const repeats = plan.repeats.filter((r) => r.section.video_id === lec.video_id)
+        const parts = props.parts.filter((p) => p.video_id === lec.video_id)
+        const shown = new Set(parts.flatMap((p) => p.section_ids))
+        const repeats = plan.repeats.filter((r) => r.section.video_id === lec.video_id && !shown.has(r.section.section_id))
         const t = props.playing?.video_id === lec.video_id ? props.playing.t : null
         return (
           <div key={lec.video_id} className="coursemap__row">
@@ -892,7 +1060,7 @@ function CourseMap(props: {
                 <button
                   key={p.key}
                   type="button"
-                  className={`stretch stretch--${p.importance} coursemap__mark${props.activeKey === p.key ? ' stretch--active' : ''}`}
+                  className={`stretch stretch--${shade(p)} coursemap__mark${props.activeKey === p.key ? ' stretch--active' : ''}`}
                   style={{ left: pct(p.start_s), width: `max(4px, calc(${pct(p.end_s - p.start_s)} - 2px))` }}
                   aria-label={`${lec.label}: ${p.title}, ${clock(p.start_s)} to ${clock(p.end_s)}. Play.`}
                   title={`${p.title} (${clock(p.start_s)})`}
@@ -934,6 +1102,26 @@ function Lectures({ course, onChange, inTab }: { course: Course; onChange: () =>
     }
   }
 
+  // Moving a lecture saves at once. The arrows stay enabled (a disabled button drops
+  // keyboard focus); clicks while a move is saving are ignored.
+  const [moving, setMoving] = useState(false)
+  const move = async (from: number, to: number) => {
+    if (moving || to < 0 || to >= course.lectures.length) return
+    const ids = course.lectures.map((l) => l.video_id)
+    const [vid] = ids.splice(from, 1)
+    ids.splice(to, 0, vid)
+    setMoving(true)
+    setErr('')
+    try {
+      await api.reorderLectures(course.id, ids)
+      onChange()
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : 'Could not move the lecture.')
+    } finally {
+      setMoving(false)
+    }
+  }
+
   const remove = () => {
     if (!window.confirm(`Delete the course “${course.title}”? Its lectures' analyses stay.`)) return
     act('delete', () => api.deleteCourse(course.id)).then(() => navigate('/'))
@@ -950,8 +1138,28 @@ function Lectures({ course, onChange, inTab }: { course: Course; onChange: () =>
         </p>
       )}
       <ol className="lectures">
-        {course.lectures.map((l) => (
+        {course.lectures.map((l, i) => (
           <li key={l.video_id} className="lecture">
+            <span className="lecture__move">
+              <button
+                type="button"
+                className="button-icon"
+                aria-label={`Move ${l.label} up`}
+                aria-disabled={i === 0}
+                onClick={() => move(i, i - 1)}
+              >
+                ↑
+              </button>
+              <button
+                type="button"
+                className="button-icon"
+                aria-label={`Move ${l.label} down`}
+                aria-disabled={i === course.lectures.length - 1}
+                onClick={() => move(i, i + 1)}
+              >
+                ↓
+              </button>
+            </span>
             <span className="lecture__label">{l.label}</span>
             <div className="lecture__body">
               {l.analysis_id ? (
@@ -993,6 +1201,10 @@ function Lectures({ course, onChange, inTab }: { course: Course; onChange: () =>
           </li>
         ))}
       </ol>
+      <p className="hint">
+        Use the arrows to put the lectures in the order you want. The course playlist follows at once; build it again to
+        also redo which of two repeated sections is kept.
+      </p>
       {course.unavailable > 0 && (
         <p className="hint">
           {course.unavailable} video{course.unavailable === 1 ? ' in the playlist is' : 's in the playlist are'} private

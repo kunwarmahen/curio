@@ -280,3 +280,69 @@ def test_pause_checks_are_throttled():
     calls = []
     check = _every(60.0, lambda: calls.append(1) or "busy")
     assert check() == "" and calls == []  # the queue checked the GPU just before starting
+
+
+def _pause_after(service, analysis_id, call):
+    """Run until the LLM has answered `call`; the next progress step finds the GPU busy."""
+    from curio_learn.errors import Paused
+
+    service.llm.calls.clear()
+    with pytest.raises(Paused):
+        service.run(analysis_id, should_pause=lambda: "The GPU is in use." if call in service.llm.calls else "")
+    assert service.get(analysis_id).status is AnalysisStatus.QUEUED
+
+
+def test_a_paused_analysis_resumes_from_its_finished_steps(service):
+    analysis_id, _ = service.submit(URL, LearningPreferences(), queue=True)
+    _pause_after(service, analysis_id, "OutlineOut")  # the outline is done
+    assert service.repo.get_checkpoint(analysis_id)["step"] == "outline"
+
+    service.llm.calls.clear()
+    seen: list[str] = []
+    resumed = service.run(analysis_id, progress=seen.append)
+    assert service.llm.calls == ["BoundariesOut", "EvaluationOut"]
+    assert any(m.startswith("Resuming") for m in seen)
+    assert service.repo.get_checkpoint(analysis_id) is None
+
+    # The same result as a run that was never paused.
+    fresh = service.analyze(URL, LearningPreferences(), force=True)
+    assert [s.model_dump() for s in resumed.sections] == [s.model_dump() for s in fresh.sections]
+    assert resumed.playlist.model_dump() == fresh.playlist.model_dump()
+    assert resumed.validation.repairs == fresh.validation.repairs
+
+
+def test_a_new_goal_keeps_the_outline_but_redoes_the_evaluations(service):
+    analysis_id, _ = service.submit(URL, LearningPreferences(), queue=True)
+    _pause_after(service, analysis_id, "EvaluationOut")  # every LLM step done
+    assert service.repo.get_checkpoint(analysis_id)["step"] == "evaluate"
+
+    service.llm.calls.clear()
+    service.run(analysis_id)  # same goal: no LLM calls at all
+    assert service.llm.calls == []
+
+    other, _ = service.submit(URL2, LearningPreferences(), queue=True)
+    _pause_after(service, other, "EvaluationOut")
+    goal = LearningPreferences(profile="technical")
+    assert service.retarget_queued(goal, [other])["updated"] == [other]
+    service.llm.calls.clear()
+    result = service.run(other)
+    assert set(service.llm.calls) == {"EvaluationOut"}
+    assert result.preferences.profile == "technical"
+
+
+def test_a_checkpoint_from_other_models_is_not_used(service):
+    analysis_id, _ = service.submit(URL, LearningPreferences(), queue=True)
+    _pause_after(service, analysis_id, "OutlineOut")
+    data = service.repo.get_checkpoint(analysis_id)
+    service.repo.save_checkpoint(analysis_id, {**data, "key": "other|key"})
+    service.llm.calls.clear()
+    service.run(analysis_id)
+    assert "OutlineOut" in service.llm.calls
+
+
+def test_removing_a_paused_video_drops_its_checkpoint(service):
+    analysis_id, _ = service.submit(URL, LearningPreferences(), queue=True)
+    _pause_after(service, analysis_id, "OutlineOut")
+    assert service.repo.get_checkpoint(analysis_id) is not None
+    assert service.remove_queued(analysis_id)
+    assert service.repo.get_checkpoint(analysis_id) is None

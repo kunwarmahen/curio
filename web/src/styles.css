@@ -1741,10 +1741,32 @@ button.stretch:hover,
 }
 .lecture {
   display: grid;
-  grid-template-columns: 7.5rem minmax(0, 1fr) auto;
+  grid-template-columns: auto 7.5rem minmax(0, 1fr) auto;
   gap: 0.75rem;
   align-items: center;
   padding: 0.7rem 0;
+}
+.lecture__move {
+  display: flex;
+  gap: 0.25rem;
+}
+.button-icon {
+  min-width: 2.25rem;
+  min-height: 2.25rem;
+  background: var(--surface);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius);
+  color: var(--ink);
+  line-height: 1;
+  cursor: pointer;
+}
+.button-icon:hover:not([aria-disabled='true']) {
+  border-color: var(--ink);
+}
+.button-icon[aria-disabled='true'] {
+  color: var(--ink-muted);
+  opacity: 0.45;
+  cursor: default;
 }
 .lecture + .lecture {
   border-top: 1px solid var(--rule);
@@ -1856,12 +1878,14 @@ button.stretch:hover,
 }
 
 @media (max-width: 640px) {
-  .coursemap__row,
-  .lecture {
+  .coursemap__row {
     grid-template-columns: 4.75rem minmax(0, 1fr);
   }
+  .lecture {
+    grid-template-columns: auto 4.75rem minmax(0, 1fr);
+  }
   .lecture__actions {
-    grid-column: 2;
+    grid-column: 3;
   }
   .coursemap__label {
     white-space: normal;
@@ -2081,6 +2105,26 @@ button.stretch:hover,
 }
 .editor__list li + li {
   border-top: 1px solid var(--rule);
+}
+.editor__groups {
+  max-height: 28rem;
+  overflow-y: auto;
+  margin-top: 0.5rem;
+}
+.editor__group .editor__list {
+  max-height: none;
+  overflow: visible;
+  margin-top: 0.25rem;
+}
+.editor__group-title {
+  margin: 0.75rem 0 0;
+  font-size: var(--t-small);
+}
+.editor__group:first-child .editor__group-title {
+  margin-top: 0;
+}
+.editor__group-title .muted {
+  font-weight: 400;
 }
 .editor__time {
   font-variant-numeric: tabular-nums;

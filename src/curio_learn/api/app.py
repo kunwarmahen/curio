@@ -25,6 +25,7 @@ from curio_learn.domain import (
     Course,
     CourseAnswer,
     CoursePractice,
+    CourseSectionChoice,
     FlashcardDeck,
     LearningNotes,
     LearningPreferences,
@@ -98,6 +99,14 @@ class RetargetRequest(BaseModel):
 
 class CustomPlaylistBody(BaseModel):
     segment_ids: list[str] | None = None  # None: back to Curio's picks
+
+
+class CoursePlaylistBody(BaseModel):
+    sections: list[str] | None = None  # "analysis id:section id"; None: back to Curio's picks
+
+
+class LectureOrderBody(BaseModel):
+    video_ids: list[str]
 
 
 class CourseRequest(BaseModel):
@@ -453,6 +462,27 @@ def create_app(service: CurioService | None = None) -> FastAPI:
     def course_practice(course_id: str, request: Request):
         try:
             return svc(request).course_practice(course_id)
+        except KeyError:
+            raise HTTPException(404, {"code": "not_found", "message": "Unknown course id"}) from None
+
+    @app.get("/api/v1/courses/{course_id}/playlist-sections", response_model=list[CourseSectionChoice])
+    def course_playlist_sections(course_id: str, request: Request):
+        try:
+            return svc(request).course_playlist_sections(course_id)
+        except KeyError:
+            raise HTTPException(404, {"code": "not_found", "message": "Unknown course id"}) from None
+
+    @app.put("/api/v1/courses/{course_id}/custom-playlist", response_model=Course)
+    def put_course_playlist(course_id: str, body: CoursePlaylistBody, request: Request):
+        try:
+            return svc(request).set_course_playlist(course_id, body.sections)
+        except KeyError:
+            raise HTTPException(404, {"code": "not_found", "message": "Unknown course id"}) from None
+
+    @app.put("/api/v1/courses/{course_id}/lectures/order", response_model=Course)
+    def reorder_lectures(course_id: str, body: LectureOrderBody, request: Request):
+        try:
+            return svc(request).reorder_course(course_id, body.video_ids)
         except KeyError:
             raise HTTPException(404, {"code": "not_found", "message": "Unknown course id"}) from None
 

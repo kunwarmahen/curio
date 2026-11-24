@@ -313,3 +313,96 @@ def test_combine_courses_into_a_learning_path(service):
         r = client.post("/api/v1/courses/combine", json={"title": "Path", "course_ids": [first, second]})
         assert r.status_code == 201 and client.get(f"/api/v1/courses/{r.json()['course_id']}").json()["title"] == "Path"
         assert client.post("/api/v1/courses/combine", json={"course_ids": [first, "nope"]}).status_code == 404
+
+
+def _course_with_plan(service):
+    a, b = analyze(service, VIDS[0]), analyze(service, VIDS[1])
+    course_id = service.group_course("", [a, b])
+    plan = service.course_plan(course_id, minutes=10)
+    return course_id, a, b, plan
+
+
+def test_reordering_lectures(service):
+    course_id, a, b, plan = _course_with_plan(service)
+    assert [p.lecture for p in plan.parts][0] == 1 and plan.parts[0].analysis_id == a
+    with pytest.raises(AnalysisError):
+        service.reorder_course(course_id, [VIDS[1]])  # every lecture, once
+    with pytest.raises(AnalysisError):
+        service.reorder_course(course_id, [VIDS[1], VIDS[1]])
+
+    course = service.reorder_course(course_id, [VIDS[1], VIDS[0]])
+    assert [lec.video_id for lec in course.lectures] == [VIDS[1], VIDS[0]]
+    # The saved plan follows the new order at once, without a rebuild.
+    assert not course.plan_stale and course.plan.id == plan.id
+    assert course.plan.parts[0].analysis_id == b
+    assert all(p.lecture == (1 if p.analysis_id == b else 2) for p in course.plan.parts)
+    assert all(r.lecture == (1 if r.video_id == VIDS[1] else 2) for p in course.plan.pairs for r in (p.a, p.b))
+    assert {p.key for p in course.plan.parts} == {p.key for p in plan.parts}  # watched parts still match
+    # Building again uses the new order.
+    rebuilt = service.course_plan(course_id, minutes=10)
+    assert rebuilt.id != plan.id and rebuilt.analysis_ids == [b, a]
+
+
+def test_course_answers_follow_the_lecture_order(service):
+    course_id, a, b, _ = _course_with_plan(service)
+    answer = service.ask_course(course_id, "What do the lectures say about idea0?")
+    before = {c.video_id: c.lecture for p in answer.parts for c in p.citations}
+    assert before
+    service.reorder_course(course_id, [VIDS[1], VIDS[0]])
+    after = service.course_conversation(course_id)[0]
+    for p in after.parts:
+        for c in p.citations:
+            assert c.lecture == (1 if c.video_id == VIDS[1] else 2)
+
+
+def test_editing_the_course_playlist(service):
+    course_id, a, b, plan = _course_with_plan(service)
+    choices = service.course_playlist_sections(course_id)
+    assert {c.analysis_id for c in choices} == {a, b}
+    curio = [c for c in choices if c.curio_pick]
+    assert curio and all(c.picked for c in curio)
+    extra = next(c for c in choices if not c.curio_pick)
+    dropped = curio[0]
+
+    mine = [f"{c.analysis_id}:{c.section_id}" for c in choices if c.curio_pick and c is not dropped]
+    mine.append(f"{extra.analysis_id}:{extra.section_id}")
+    course = service.set_course_playlist(course_id, mine)
+    picked = {(p.analysis_id, sid) for p in course.custom_parts for sid in p.section_ids}
+    assert (extra.analysis_id, extra.section_id) in picked
+    assert (dropped.analysis_id, dropped.section_id) not in picked
+    assert [p.lecture for p in course.custom_parts] == sorted(p.lecture for p in course.custom_parts)
+    assert course.plan.parts == plan.parts  # Curio's picks are kept alongside
+    shown = {(c.analysis_id, c.section_id) for c in service.course_playlist_sections(course_id) if c.picked}
+    assert shown == picked
+
+    # The course quiz covers the learner's playlist.
+    to_run = service.submit_course_practice(course_id)
+    practice = service.run_course_practice(course_id, to_run)
+    covered = {(x.study.analysis_id, sid) for x in practice.sets for sid in x.study.segment_ids}
+    assert covered == picked
+
+    with pytest.raises(AnalysisError):
+        service.set_course_playlist(course_id, ["nope:S01"])
+    with pytest.raises(AnalysisError):
+        service.set_course_playlist(course_id, [])
+    # Curio's exact picks, or None, go back to Curio's.
+    curio_ids = [f"{c.analysis_id}:{c.section_id}" for c in curio]
+    assert service.set_course_playlist(course_id, curio_ids).custom_parts is None
+    service.set_course_playlist(course_id, mine)
+    assert service.set_course_playlist(course_id, None).custom_parts is None
+
+
+def test_api_course_editing(service):
+    course_id, a, b, _ = _course_with_plan(service)
+    with TestClient(create_app(service)) as client:
+        choices = client.get(f"/api/v1/courses/{course_id}/playlist-sections").json()
+        assert choices and "curio_pick" in choices[0] and "duration_s" in choices[0]
+        first = f"{choices[0]['analysis_id']}:{choices[0]['section_id']}"
+        r = client.put(f"/api/v1/courses/{course_id}/custom-playlist", json={"sections": [first]})
+        assert r.status_code == 200 and len(r.json()["custom_parts"]) == 1
+        r = client.put(f"/api/v1/courses/{course_id}/lectures/order", json={"video_ids": [VIDS[1], VIDS[0]]})
+        assert r.status_code == 200 and r.json()["lectures"][0]["video_id"] == VIDS[1]
+        assert r.json()["custom_parts"][0]["lecture"] == 2  # the first lecture moved to second
+        r = client.put(f"/api/v1/courses/{course_id}/lectures/order", json={"video_ids": [VIDS[1]]})
+        assert r.status_code == 400
+        assert client.get("/api/v1/courses/nope/playlist-sections").status_code == 404

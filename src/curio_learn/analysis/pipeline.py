@@ -10,7 +10,7 @@ from collections.abc import Callable
 from curio_learn.analysis.ads import remove_ads
 from curio_learn.analysis.boundaries import refine_boundaries
 from curio_learn.analysis.evaluate import evaluate_sections, section_text
-from curio_learn.analysis.outline import generate_outline
+from curio_learn.analysis.outline import Outline, generate_outline
 from curio_learn.analysis.playlist import PlaylistConfig, build_playlist, compute_budget
 from curio_learn.analysis.profiles import learner_brief, spec_for
 from curio_learn.analysis.redundancy import similarity_matrix
@@ -21,6 +21,8 @@ from curio_learn.domain import (
     AnalysisStatus,
     LearningPreferences,
     LLMInfo,
+    Section,
+    SectionEvaluation,
     Transcript,
     VideoAnalysis,
     VideoMetadata,
@@ -28,10 +30,61 @@ from curio_learn.domain import (
 from curio_learn.errors import AnalysisError
 from curio_learn.llm.base import LLMProvider
 from curio_learn.processing.normalize import boundary_units, build_blocks, clean_cues
+from curio_learn.processing.retrieval import blocks_key
 
 log = logging.getLogger(__name__)
 
 Progress = Callable[[str], None]
+SaveCheckpoint = Callable[[dict], None]
+
+# The LLM steps, in order. A checkpoint holds the state after the last one finished.
+STEPS = ("outline", "boundaries", "ads", "evaluate")
+_STEP_NAMES = {
+    "outline": "the outline",
+    "boundaries": "the section boundaries",
+    "ads": "ad removal",
+    "evaluate": "the evaluations",
+}
+
+
+class _Resume:
+    """Finished steps of an earlier, interrupted run of the same analysis.
+
+    A checkpoint is `{"key", "step", "elapsed_s", "prefs", ...state}`. It is used only
+    when its key (models, pipeline version, transcript blocks, step switches) matches;
+    the evaluations also need the same learning goal, since a queued video's goal can
+    change while it waits.
+    """
+
+    def __init__(self, checkpoint: dict | None, key: str, prefs_key: str, save: SaveCheckpoint):
+        ok = bool(checkpoint) and checkpoint.get("key") == key and checkpoint.get("step") in STEPS
+        if ok and checkpoint["step"] == "evaluate" and checkpoint.get("prefs") != prefs_key:
+            ok = False  # keep the outline, redo the evaluations
+            checkpoint = {**checkpoint, "step": checkpoint.get("before_evaluate", "")}
+            ok = checkpoint["step"] in STEPS
+        self.data: dict = checkpoint if ok else {}
+        self.key, self.prefs_key, self._save = key, prefs_key, save
+        self.elapsed_before = float(self.data.get("elapsed_s", 0.0))
+
+    def done(self, step: str) -> bool:
+        return bool(self.data) and STEPS.index(step) <= STEPS.index(self.data["step"])
+
+    def save(self, step: str, elapsed_s: float, **state) -> None:
+        before = self.data.get("step", "") if step == "evaluate" else ""
+        self.data = {
+            **self.data,
+            **state,
+            "key": self.key,
+            "step": step,
+            "prefs": self.prefs_key,
+            "elapsed_s": round(self.elapsed_before + elapsed_s, 1),
+        }
+        if step == "evaluate":
+            self.data["before_evaluate"] = before
+        try:
+            self._save(self.data)
+        except Exception:  # a lost checkpoint only costs time on the next run
+            log.exception("Could not save the %s checkpoint", step)
 
 
 class AnalysisPipeline:
@@ -57,7 +110,13 @@ class AnalysisPipeline:
         *,
         analysis_id: str | None = None,
         progress: Progress = lambda _: None,
+        checkpoint: dict | None = None,
+        save_checkpoint: SaveCheckpoint = lambda _: None,
+        version: str = "",
     ) -> VideoAnalysis:
+        """Analyze one video. After each LLM step the state so far goes to
+        `save_checkpoint`; given that `checkpoint` back (same `version`, models and
+        transcript), a run that was interrupted skips the steps it had finished."""
         s = self.settings
         started = time.monotonic()
         models = {"outline": s.model_for("outline"), "evaluate": s.model_for("evaluate")}
@@ -68,24 +127,67 @@ class AnalysisPipeline:
             raise AnalysisError("The transcript is empty after cleaning.")
         log.info("%s: %d cues -> %d blocks", meta.video_id, len(transcript.cues), len(blocks))
 
-        try:
-            outline, repairs = generate_outline(
-                self.provider,
-                model=models["outline"],
-                meta=meta,
-                blocks=blocks,
-                window_tokens=self._window_tokens(),
-                retries=s.llm_max_retries,
-                progress=progress,
+        key = "|".join(
+            [
+                version,
+                self.provider.name,
+                models["outline"],
+                models["evaluate"],
+                blocks_key(blocks),
+                f"r{int(s.refine_boundaries)}a{int(s.detect_ads)}",
+            ]
+        )
+        resume = _Resume(checkpoint, key, prefs.cache_key(), save_checkpoint)
+
+        def elapsed() -> float:
+            return time.monotonic() - started
+
+        def restore() -> tuple[list[Section], list[str], list[str]]:
+            d = resume.data
+            return [Section.model_validate(x) for x in d["sections"]], list(d["repairs"]), list(d["warnings"])
+
+        if resume.done("outline"):
+            d = resume.data
+            outline = Outline(overview=d["overview"], key_concepts=d["key_concepts"], sections=[])
+            sections, repairs, warnings = restore()
+            log.info("%s: resuming after the %s step", meta.video_id, d["step"])
+            progress(f"Resuming: kept the finished steps up to {_STEP_NAMES[d['step']]}")
+        else:
+            try:
+                outline, repairs = generate_outline(
+                    self.provider,
+                    model=models["outline"],
+                    meta=meta,
+                    blocks=blocks,
+                    window_tokens=self._window_tokens(),
+                    retries=s.llm_max_retries,
+                    progress=progress,
+                )
+            except ValueError as exc:
+                raise AnalysisError(f"Could not segment the transcript: {exc}") from exc
+            sections, warnings = outline.sections, []
+            log.info("Outline: %d sections", len(sections))
+            resume.save(
+                "outline",
+                elapsed(),
+                overview=outline.overview,
+                key_concepts=outline.key_concepts,
+                sections=[x.model_dump(mode="json") for x in sections],
+                repairs=repairs,
+                warnings=warnings,
             )
-        except ValueError as exc:
-            raise AnalysisError(f"Could not segment the transcript: {exc}") from exc
-        sections = outline.sections
-        log.info("Outline: %d sections", len(sections))
+
+        def saved(step: str) -> None:
+            resume.save(
+                step,
+                elapsed(),
+                sections=[x.model_dump(mode="json") for x in sections],
+                repairs=repairs,
+                warnings=warnings,
+            )
 
         units = boundary_units(transcript.cues)
-        warnings: list[str] = []
-        if s.refine_boundaries:
+        if s.refine_boundaries and not resume.done("boundaries"):
             sections, more_repairs, more_warnings = refine_boundaries(
                 self.provider,
                 model=models["outline"],
@@ -97,7 +199,8 @@ class AnalysisPipeline:
             )
             repairs += more_repairs
             warnings += more_warnings
-        if s.detect_ads:
+            saved("boundaries")
+        if s.detect_ads and not resume.done("ads"):
             sections, more_repairs, more_warnings = remove_ads(
                 self.provider,
                 model=models["outline"],
@@ -109,19 +212,31 @@ class AnalysisPipeline:
             )
             repairs += more_repairs
             warnings += more_warnings
+            saved("ads")
 
-        evaluations, eval_warnings = evaluate_sections(
-            self.provider,
-            model=models["evaluate"],
-            title=meta.title,
-            brief=learner_brief(prefs),
-            sections=sections,
-            blocks=units,
-            batch_tokens=self._batch_tokens(),
-            retries=s.llm_max_retries,
-            progress=progress,
-        )
-        warnings += eval_warnings
+        if resume.done("evaluate"):
+            d = resume.data
+            evaluations = {k: SectionEvaluation.model_validate(v) for k, v in d["evaluations"].items()}
+            warnings += d["eval_warnings"]
+        else:
+            evaluations, eval_warnings = evaluate_sections(
+                self.provider,
+                model=models["evaluate"],
+                title=meta.title,
+                brief=learner_brief(prefs),
+                sections=sections,
+                blocks=units,
+                batch_tokens=self._batch_tokens(),
+                retries=s.llm_max_retries,
+                progress=progress,
+            )
+            resume.save(
+                "evaluate",
+                elapsed(),
+                evaluations={k: v.model_dump(mode="json") for k, v in evaluations.items()},
+                eval_warnings=eval_warnings,
+            )
+            warnings += eval_warnings
 
         progress("Scoring segments and detecting redundancy")
         sim = similarity_matrix([section_text(sec, units) for sec in sections])
@@ -174,5 +289,5 @@ class AnalysisPipeline:
             llm=LLMInfo(provider=self.provider.name, models=models),
             transcript_language=transcript.language,
             transcript_generated=transcript.is_generated,
-            elapsed_s=round(time.monotonic() - started, 1),
+            elapsed_s=round(resume.elapsed_before + elapsed(), 1),
         )

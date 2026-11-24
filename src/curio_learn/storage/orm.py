@@ -54,6 +54,17 @@ class AnalysisRow(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
 
 
+class AnalysisCheckpointRow(Base):
+    """The finished steps of an analysis that was paused, so it can pick up there."""
+
+    __tablename__ = "analysis_checkpoints"
+
+    analysis_id: Mapped[str] = mapped_column(ForeignKey("analyses.id", ondelete="CASCADE"), primary_key=True)
+    step: Mapped[str] = mapped_column(String(16))
+    data: Mapped[dict] = mapped_column(JSON)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
 class SegmentRow(Base):
     """One row per learning segment, so progress tracking can attach to it later."""
 
@@ -232,4 +243,14 @@ class CustomPlaylistRow(Base):
 
     analysis_id: Mapped[str] = mapped_column(ForeignKey("analyses.id", ondelete="CASCADE"), primary_key=True)
     segment_ids: Mapped[list] = mapped_column(JSON)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
+class CourseCustomPlaylistRow(Base):
+    """The learner's own course playlist: sections they chose, as "analysis id:section id"."""
+
+    __tablename__ = "course_custom_playlists"
+
+    course_id: Mapped[str] = mapped_column(ForeignKey("courses.id", ondelete="CASCADE"), primary_key=True)
+    sections: Mapped[list] = mapped_column(JSON)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
