@@ -113,7 +113,9 @@ class Settings(BaseSettings):
     def resolved_provider(self) -> Literal["ollama", "anthropic"]:
         if self.llm_provider != "auto":
             return self.llm_provider
-        return "anthropic" if os.environ.get("ANTHROPIC_API_KEY") else "ollama"
+        # An API key or an OAuth token (ANTHROPIC_AUTH_TOKEN) selects Claude.
+        has_claude = os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")
+        return "anthropic" if has_claude else "ollama"
 
     def model_for(self, task: str) -> str:
         override = {

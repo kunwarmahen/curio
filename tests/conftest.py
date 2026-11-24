@@ -161,7 +161,7 @@ class FakeLLM:
                     {
                         "question": f"What does {sid} show?",
                         "wrong_options": ["Something else", "A third thing", "  "],
-                        "right_option": f"The idea of {sid}",
+                        "right_option": f"The idea of part {int(sid[1:])}",
                         "explanation": f"{sid} says so.",
                         "sentence": 2,
                     }
@@ -221,6 +221,16 @@ class FakeLLM:
                     ]
                 }
             )
+        if name == "QuizPadOut":
+            import re
+
+            # q1's wrong options grow to the right answer's length; others come back short.
+            ids = re.findall(r"^id: (q\d+)$", user, re.M)
+            out = []
+            for qid in ids:
+                pad = " because a long and specific but wrong mechanism applies" if qid == "q1" else ""
+                out.append({"id": qid, "wrong_options": [f"Wrong {k}{pad}" for k in "abc"]})
+            return json.dumps({"questions": out})
         if name == "ChecklistCardsOut":
             import re
 

@@ -223,3 +223,13 @@ class CourseQuestionRow(Base):
     question: Mapped[str] = mapped_column(Text)
     answer_json: Mapped[dict] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class CustomPlaylistRow(Base):
+    """The learner's own playlist for an analysis: segments they chose, in time order."""
+
+    __tablename__ = "custom_playlists"
+
+    analysis_id: Mapped[str] = mapped_column(ForeignKey("analyses.id", ondelete="CASCADE"), primary_key=True)
+    segment_ids: Mapped[list] = mapped_column(JSON)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
@@ -32,7 +33,7 @@ from curio_learn.domain import (
     StudySet,
     VideoAnalysis,
 )
-from curio_learn.errors import CurioError, InvalidURL
+from curio_learn.errors import CurioError, InvalidURL, Paused
 from curio_learn.logging_setup import configure_logging
 from curio_learn.overnight import LocalGpuProbe, QueueStatus, QueueWorker, Window
 from curio_learn.service import CurioService
@@ -95,6 +96,10 @@ class RetargetRequest(BaseModel):
     save_default: bool = True
 
 
+class CustomPlaylistBody(BaseModel):
+    segment_ids: list[str] | None = None  # None: back to Curio's picks
+
+
 class CourseRequest(BaseModel):
     url: str  # a YouTube playlist link
     preferences: LearningPreferences = LearningPreferences()
@@ -103,6 +108,11 @@ class CourseRequest(BaseModel):
 class GroupRequest(BaseModel):
     title: str = ""
     analysis_ids: list[str]
+
+
+class CombineRequest(BaseModel):
+    title: str = ""
+    course_ids: list[str]
 
 
 class CourseAccepted(BaseModel):
@@ -263,6 +273,17 @@ def create_app(service: CurioService | None = None) -> FastAPI:
         svc(request).set_completed(analysis_id, segment_id, body.completed)
         return {"analysis_id": analysis_id, "segment_id": segment_id, "completed": body.completed}
 
+    @app.get("/api/v1/analyses/{analysis_id}/custom-playlist", response_model=CustomPlaylistBody)
+    def get_custom_playlist(analysis_id: str, request: Request):
+        return CustomPlaylistBody(segment_ids=svc(request).custom_playlist(analysis_id))
+
+    @app.put("/api/v1/analyses/{analysis_id}/custom-playlist", response_model=CustomPlaylistBody)
+    def put_custom_playlist(analysis_id: str, body: CustomPlaylistBody, request: Request):
+        try:
+            return CustomPlaylistBody(segment_ids=svc(request).set_custom_playlist(analysis_id, body.segment_ids))
+        except KeyError:
+            raise HTTPException(404, {"code": "not_found", "message": "Unknown analysis id"}) from None
+
     @app.get("/api/v1/analyses/{analysis_id}/completed", response_model=list[str])
     def completed(analysis_id: str, request: Request):
         return sorted(svc(request).completed(analysis_id))
@@ -353,6 +374,13 @@ def create_app(service: CurioService | None = None) -> FastAPI:
     @app.post("/api/v1/courses/group", status_code=201, response_model=CourseAccepted)
     def group_course(body: GroupRequest, request: Request):
         return CourseAccepted(course_id=svc(request).group_course(body.title, body.analysis_ids))
+
+    @app.post("/api/v1/courses/combine", status_code=201, response_model=CourseAccepted)
+    def combine_courses(body: CombineRequest, request: Request):
+        try:
+            return CourseAccepted(course_id=svc(request).combine_courses(body.title, body.course_ids))
+        except KeyError:
+            raise HTTPException(404, {"code": "not_found", "message": "Unknown course id"}) from None
 
     @app.get("/api/v1/courses", response_model=list[Course])
     def list_courses(request: Request):
@@ -554,10 +582,28 @@ def _run_safely(service: CurioService, analysis_id: str) -> None:
         log.warning("Analysis %s failed", analysis_id, exc_info=True)
 
 
+def _every(seconds: float, check: Callable[[], str]) -> Callable[[], str]:
+    """`check`, but asked at most once every `seconds` (a GPU check takes 5 s)."""
+    last = [time.monotonic()]
+
+    def throttled() -> str:
+        now = time.monotonic()
+        if now - last[0] < seconds:
+            return ""
+        last[0] = now
+        return check()
+
+    return throttled
+
+
 def _run_queued(service: CurioService, analysis_id: str, worker: QueueWorker) -> None:
-    """A queued video: analyze it, then write its notes and quiz while the GPU stays free."""
+    """A queued video: analyze it, then write its notes and quiz while the GPU stays free.
+    If something else starts using the GPU during the analysis, it pauses and waits in
+    the queue again."""
     try:
-        service.run(analysis_id)
+        service.run(analysis_id, should_pause=_every(60.0, worker.gpu_busy))
+    except Paused:
+        return
     except Exception:
         log.warning("Analysis %s failed", analysis_id, exc_info=True)
         return

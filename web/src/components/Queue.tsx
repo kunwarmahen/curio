@@ -120,7 +120,11 @@ export function QueueList(props: { queue: QueueStatus; onChange: () => void; goa
                   {item.video.channel}. {duration(item.video.duration_s)}. {goalLine(item.preferences)}.
                 </span>
                 <span className={item.status === 'queued' ? 'queue__badge' : 'queue__badge queue__badge--live'}>
-                  {item.status === 'queued' ? 'Waiting' : `Analyzing${item.progress ? `: ${item.progress}` : ''}`}
+                  {item.status === 'queued'
+                    ? item.progress.startsWith('Paused')
+                      ? `${item.progress} It starts over when the GPU is free.`
+                      : 'Waiting'
+                    : `Analyzing${item.progress ? `: ${item.progress}` : ''}`}
                 </span>
               </div>
             </a>

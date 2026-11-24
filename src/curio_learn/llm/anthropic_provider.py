@@ -78,6 +78,9 @@ class AnthropicProvider:
         if message.stop_reason == "max_tokens":
             log.warning("Claude output hit max_tokens=%d; JSON is probably truncated", max_tokens)
         usage = message.usage
+        # A refused request answered by the fallback model has a "fallback_message" iteration.
+        if any(getattr(it, "type", "") == "fallback_message" for it in getattr(usage, "iterations", None) or []):
+            log.warning("Claude declined part of this request; %s answered instead", getattr(message, "model", "?"))
         log.info(
             "Claude usage: in=%s cache_read=%s out=%s",
             usage.input_tokens,

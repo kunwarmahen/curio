@@ -10,9 +10,9 @@
 | Deployment | ✅ Podman image + `curio.sh` |
 | Phase 2: Intelligent learning | ✅ learning profiles, custom objective, redundancy detection, skip recommendations, sentence-level boundaries, mid-roll ad removal and learning notes |
 | LAN access | ✅ app and Podman container listen on all interfaces by default |
-| Phase 3: Interactive learning | 🟡 Ask the Video, quizzes and flashcards with spaced repetition, a remembered default goal, and segment completion tracking; saved custom playlists are not built |
+| Phase 3: Interactive learning | ✅ Ask the Video, quizzes and flashcards with spaced repetition, a remembered default goal, segment completion tracking, and saved custom playlists |
 | Overnight queue | ✅ queue videos any time; analyzed 1–7 AM while the GPU is idle |
-| Phase 4: Multi-video intelligence | 🟡 courses from YouTube playlists, one course playlist across lectures without repeats (every verdict shown), an "easy to miss" checklist, Ask the course, and a course quiz and flashcards; curricula across courses are not built |
+| Phase 4: Multi-video intelligence | 🟡 learning paths across courses, courses from YouTube playlists, one course playlist across lectures without repeats (every verdict shown), an "easy to miss" checklist, Ask the course, and a course quiz and flashcards; curricula across courses are not built |
 
 ## Phase 1 log (2026-11-23)
 
@@ -33,7 +33,7 @@
 - `storage`: SQLAlchemy/SQLite (videos, transcripts, analyses, segments),
   cache keyed by video + preferences + model + pipeline version.
 - `service`, FastAPI (`/api/v1`), CLI. (A Streamlit UI was built first and then replaced; see the UI log below.)
-- 98 offline tests at the end of Phase 1 (105 with notes, 115 with Ask the Video, 121 with the overnight queue, 131 with quizzes, flashcards and the default goal, 134 with overnight notes and quizzes, 140 with courses, 144 with Ask the course, 146 with the course quiz) (ad detection and carving, sentence units and boundary refinement, URL parsing, normalization, segmentation repair, scoring and
+- 98 offline tests at the end of Phase 1 (105 with notes, 115 with Ask the Video, 121 with the overnight queue, 131 with quizzes, flashcards and the default goal, 134 with overnight notes and quizzes, 140 with courses, 144 with Ask the course, 146 with the course quiz, 156 with the follow-ups) (ad detection and carving, sentence units and boundary refinement, URL parsing, normalization, segmentation repair, scoring and
   calibration, playlist and prerequisites, validation, LLM retry, request shapes and
   truncation guard, service caching, stale runs, API).
 
@@ -428,17 +428,41 @@ general goal, so flagged), on a copy of the database:
   sentence boundary information", Lecture 3) matches the transcript.
 - 2 new tests (146 in total).
 
+### Quiz giveaways, more pairs, pausing, custom playlists, Claude check, learning paths (2026-11-24)
+- **Quiz giveaways.** A pass rewrites only the wrong options of questions whose right
+  answer is noticeably the longest (5% and 6 characters), up to two rounds, rejecting
+  rewrites that overshoot (1.5x). Five lecture quizzes: the right answer is the
+  longest in 0-2 of 10-12 questions (chance is a quarter), from 5-9 before; about
+  15-20 s more per quiz. Quiz version 3.
+- **Made-up names.** Reading rewritten questions found a right answer saying ToolLLM
+  used "GPT-4"; the lecture only says ChatGPT. Right answers that name something the
+  transcript never says are now dropped, with a warning.
+- **More pairs.** Two matches per section, up to 6 pairs a lecture (course version
+  2): 42 pairs instead of 28 for 7 lectures, 117 s; this run judged no repeats (the
+  earlier ones came back as overlaps with specific reasons).
+- **Pausing.** A queued analysis checks the GPU about once a minute and, if
+  something else uses it, goes back into the queue ("Paused: …", shown in the queue)
+  and starts over later. Notes, quiz and course rebuild already checked between steps.
+- **Custom playlists.** Edit a video's playlist (add parts Curio left out, drop its
+  picks), saved on the server, with a switch back to Curio's picks.
+- **Claude.** Checked the provider against the current API reference and the installed
+  SDK (2.12.0): adaptive thinking, explicit effort (Opus 5.5 defaults to medium),
+  `output_config.format`, refusal fallback (`fallbacks="default"` + beta), all
+  present. Added: `ANTHROPIC_AUTH_TOKEN` also selects Claude; a log line when the
+  fallback model answered; `curio check-claude`. Still not run live: no credentials
+  on this machine.
+- **Learning paths.** Combine courses into one course (in order, no duplicate
+  videos); everything a course has works across them.
+- The container's 10-lecture course quiz: 55 questions and 67 cards (12 from "easy to
+  miss") in 6.5 minutes. The cards arrive about 9 s after the quiz shows as done.
+- 10 new tests (156 in total).
+
 ### Known gaps / next steps
-- The Anthropic provider is covered by unit tests with a mocked client only.
-  No API key was available, so it has not been run against the live API yet.
+- The Anthropic provider has not been run against the live API (no credentials
+  here); `curio check-claude` checks it with one tiny request.
 - Calibrate the scoring thresholds and the redundancy threshold on more videos
   (lectures, podcasts, tutorials with auto-captions).
-- Overnight queue, possible next step: pause between videos when someone starts using the GPU mid-run (today a running
-  analysis finishes).
-- Phase 3, still to build: saved custom playlists.
-- Courses: reorder lectures by hand. Repeats are only looked for among each
-  section's closest match in another lecture (about 4 pairs a lecture), and half of
-  those turn out different; checking more pairs would find more.
-- Quizzes: the right answer is still too often the longest option. Options: a
-  code-side retry for questions with a clear gap, or asking for the options in a
-  fixed length band from the start.
+- A paused analysis starts over; keeping finished steps would save a few minutes.
+- Courses: reorder lectures by hand. Repeat vs overlap verdicts vary run to run.
+- Custom playlists are per video; a course playlist can't be edited yet.
+- The made-up-names check covers names, not plain-word claims or numbers.

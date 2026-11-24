@@ -65,6 +65,7 @@ uv run curio queue "<youtube url>" --profile technical   # analyze tonight (curi
 uv run curio queue                                       # list the queue; --remove <id> takes one out
 uv run curio course "<youtube playlist url>"             # add a course: queue its lectures for tonight
 uv run curio course <course id> --build --minutes 120    # build and print the course playlist
+uv run curio check-claude    # one tiny request to check a Claude API key (< $0.01)
 ```
 
 `curio api` listens on all interfaces, so phones and other computers on your
@@ -123,13 +124,19 @@ oldest first, between 1 AM and 7 AM local time (`CURIO_QUEUE_HOURS`), and only w
 the GPU is idle: under 20% utilization (the median of five nvidia-smi readings, so a
 desktop's brief spikes don't count) and no Ollama model loaded by another program.
 Before each video it checks again, so if you start using the GPU at night the queue
-waits; a video already running finishes. After each video it also writes the
+waits; a video being analyzed checks again about once a minute and, if something else
+is using the GPU, pauses and goes back into the queue (it starts over later). After each video it also writes the
 notes and a quiz with flashcards for its playlist, so they're ready in the morning
 (`CURIO_QUEUE_PREPARE=false` turns this off; if the GPU gets busy, they're skipped
 and you can write them from the video's page). The Queue page (in the menu) lists the
 queue with what it's waiting for, and each queued video can be started now or
 removed; the first page shows it in one line. Queuing a
 video that is already analyzed opens the existing result.
+
+**Your own playlist.** On a video page, **Edit the playlist** lists every part of
+the video: tick the ones you want (including parts Curio left out) and save. The
+player then follows your playlist, and a switch goes back to Curio's picks. It's saved
+on the server, so every device shows it.
 
 **Courses.** Paste a playlist link (`youtube.com/playlist?list=…`) into the box on
 the home page, or use "Add the whole playlist as a course" on a video link that names
@@ -159,6 +166,11 @@ lectures with the local model); **Ask the course**; **Repeats**: every pair of
 similar sections the model compared, as left out, other repeats, or overlaps (each
 adds something), with why; and **Lectures**, with each lecture's state, the length
 of the course playlist, and building it again.
+
+**Learning paths.** With two or more courses, the Courses page can combine them
+(in the order you tick them) into a learning path: a course of its own with all their
+lectures (a video in two courses comes once), so the course playlist, repeats,
+checklist, questions and quiz work across courses.
 
 `curio analyze` prints the playlist and, with `--json out.json`, writes the full
 analysis. Results are cached in `data/curio.db`. Pass `--force` to re-analyze.
@@ -230,7 +242,7 @@ most important ones:
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `CURIO_LLM_PROVIDER` | `auto` | `auto` uses Anthropic if `ANTHROPIC_API_KEY` is set, otherwise Ollama |
+| `CURIO_LLM_PROVIDER` | `auto` | `auto` uses Anthropic if `ANTHROPIC_API_KEY` (or `ANTHROPIC_AUTH_TOKEN`) is set, otherwise Ollama; `curio check-claude` tests a key |
 | `CURIO_LLM_MODEL` | provider default | model for all tasks; `CURIO_LLM_MODEL_OUTLINE` / `_EVALUATE` / `_NOTES` / `_ASK` / `_STUDY` / `_COURSE` override per task |
 | `CURIO_ASK_CONTEXT_TOKENS` | `0` (auto) | transcript tokens Ask may show the model; longer transcripts are searched |
 | `CURIO_EMBED_MODEL` | `nomic-embed-text` | Ollama embedding model for searching long transcripts; empty = keyword search only |
@@ -291,7 +303,11 @@ most important ones:
     sentences, with a question and card budget per section; each item names the
     sentence that answers it. The model writes the right answer and the wrong options
     in separate fields; code shuffles them. A second call checks every question:
-    replaces "wrong" options that are also right and evens out option lengths.
+    replaces "wrong" options that are also right and evens out option lengths; then,
+    for questions whose right answer is still noticeably the longest, up to two calls
+    rewrite only the wrong options to the right answer's length (never the right
+    answer). A question whose right answer names something the transcript never says
+    (a model, method or acronym) is dropped.
 13. **Course playlist (LLM, on request):** every watchable section of every analyzed
     lecture. Embedding similarity finds each section's closest section in another
     lecture; the model judges the closest pairs (repeat, overlap or different, and

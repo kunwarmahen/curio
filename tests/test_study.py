@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 
 from curio_learn.analysis.study import BOX_DAYS, QuestionOut, clean_question, schedule
 from curio_learn.api.app import create_app
-from curio_learn.domain import AnalysisStatus, CardGrade, CardState, NotesScope
+from curio_learn.domain import AnalysisStatus, CardGrade, CardState, LearningPreferences, NotesScope
 from curio_learn.errors import AnalysisError
 from curio_learn.processing.normalize import boundary_units
 from curio_learn.service import CurioService
@@ -166,3 +166,86 @@ def test_api_study_flow(service, analysis):
         bad = {"study_id": study_id, "card_id": "c999", "grade": "good"}
         assert client.post("/api/v1/flashcards/review", json=bad).status_code == 404
         assert client.get("/api/v1/study/nope").status_code == 404
+
+
+def test_even_out_fixes_only_real_giveaways():
+    from curio_learn.analysis.study import even_out, giveaway
+    from curio_learn.domain import QuizQuestion
+
+    from .conftest import FakeLLM
+
+    right = "The reader saturates after ten to twenty documents and then degrades"
+    q1 = QuizQuestion(
+        id="q1",
+        question="Q1?",
+        options=[right, "More is better", "No effect"],
+        answer=0,
+        explanation="",
+        section_id="S01",
+        start_s=0,
+    )
+    q2 = QuizQuestion(
+        id="q2", question="Q2?", options=["No effect", right], answer=1, explanation="", section_id="S01", start_s=0
+    )
+    q3 = QuizQuestion(
+        id="q3",
+        question="Q3?",
+        options=["Short", "Also short", "Shorter"],
+        answer=0,
+        explanation="",
+        section_id="S01",
+        start_s=0,
+    )
+    assert giveaway(q1) and giveaway(q2) and not giveaway(q3)
+    llm = FakeLLM()
+    assert even_out(llm, model="m", questions=[q1, q2, q3]) == 1
+    # q1's padded options close the gap; the right answer is unchanged and still marked.
+    assert not giveaway(q1) and q1.options[q1.answer] == right and len(q1.options) == 4
+    # q2's rewrite didn't help, so it was not applied.
+    assert q2.options == ["No effect", right]
+    # A second round tried the one still flagged.
+    assert llm.calls == ["QuizPadOut", "QuizPadOut"]
+
+
+def test_unsupported_names():
+    from curio_learn.analysis.study import unsupported_names
+
+    said = "Then they come to ChatGPT and ask it to pretend to be a user, then do SFT on Llama 2."
+    assert unsupported_names("It uses GPT-4 to generate queries", said) == ["GPT-4"]
+    assert unsupported_names("It uses ChatGPT to write queries for SFT on Llama-2", said) == []
+    assert unsupported_names("It keeps the call with the lowest loss", said) == []
+
+
+def test_plain_numbers_are_not_names():
+    from curio_learn.analysis.study import unsupported_names
+
+    assert unsupported_names("Accuracy saturates after 10-20 documents, at 16,000 tools", "about ten documents") == []
+
+
+def test_quiz_drops_answers_naming_what_the_video_never_says(settings):
+    from curio_learn.analysis.study import generate_study
+    from curio_learn.processing.normalize import boundary_units
+
+    from .conftest import FakeLLM, make_cues
+
+    class MadeUp(FakeLLM):
+        def complete_json(self, **kw):
+            out = super().complete_json(**kw)
+            return (
+                out.replace("The idea of part 1", "GPT-4 does part 1") if kw["schema"]["_model"] == "StudyOut" else out
+            )
+
+    service = CurioService(settings, llm=FakeLLM(), metadata=FakeMetadata(), transcripts=FakeTranscripts())
+    analysis = service.analyze("https://youtu.be/e_m99aR7_3Q", LearningPreferences())
+    st = generate_study(
+        MadeUp(),
+        model="m",
+        analysis=analysis,
+        units=boundary_units(make_cues()),
+        scope=NotesScope.VIDEO,
+        study_id="x",
+        batch_tokens=2000,
+    )
+    assert all("GPT-4" not in q.options[q.answer] for q in st.questions)
+    assert any("named something the video doesn't say" in w for w in st.warnings)
+    assert [q.id for q in st.questions] == [f"q{i}" for i in range(1, len(st.questions) + 1)]

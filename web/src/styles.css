@@ -2038,3 +2038,57 @@ button.stretch:hover,
   padding-bottom: 0.35rem;
   border-bottom: 1px solid var(--rule);
 }
+
+/* Video page: the learner's own playlist. */
+.playlist__tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin-top: 0.6rem;
+}
+.playlist__which {
+  border: 0;
+  padding: 0;
+  margin: 0;
+}
+.playlist__which .segmented__option span {
+  padding: 0.3rem 0.75rem;
+  font-size: var(--t-small);
+}
+.editor {
+  margin-top: 0.75rem;
+  padding: 0.75rem;
+  background: var(--surface);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius);
+}
+.editor__list {
+  list-style: none;
+  padding: 0;
+  margin: 0.5rem 0 0;
+  max-height: 22rem;
+  overflow-y: auto;
+}
+.editor__row {
+  display: grid;
+  grid-template-columns: auto 4.25rem 1fr;
+  gap: 0.5rem;
+  align-items: baseline;
+  padding: 0.35rem 0;
+  font-size: var(--t-small);
+  cursor: pointer;
+}
+.editor__list li + li {
+  border-top: 1px solid var(--rule);
+}
+.editor__time {
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-muted);
+}
+.editor__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}

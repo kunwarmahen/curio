@@ -173,6 +173,7 @@ invent a timestamp: code converts the numbers to the original cue times.
 | `GET`  | `/analyses/{id}/completed` | ids of segments marked watched |
 | `PUT`  | `/analyses/{id}/segments/{segment_id}/completed` | `{completed: bool}` |
 | `POST` | `/analyses/{id}/notes` | `{scope, segment_ids?, force?}` → `202 {notes_id, status}`; runs in background on the same single worker as analyses. Reuses saved notes with the same scope and model unless `force`. |
+| `GET`  | `/analyses/{id}/custom-playlist` / `PUT` | the learner's own playlist `{segment_ids}` (time order) or `null` for Curio's; `PUT {segment_ids: null}` (or exactly Curio's picks) goes back |
 | `GET`  | `/analyses/{id}/notes` | `[LearningNotes]`, newest first |
 | `GET`  | `/notes/{id}` | `LearningNotes` (poll while `pending`/`running`) |
 | `POST` | `/analyses/{id}/questions` | `{question}` → `Answer` (synchronous, seconds) |
@@ -188,6 +189,7 @@ invent a timestamp: code converts the numbers to the original cue times.
 | `POST` | `/flashcards/review` | `{study_id, card_id, grade: again\|good\|easy}` → `CardState` |
 | `GET`  | `/preferences/default` / `PUT` | the learner's default goal `{profile, custom_objective, target_minutes}` (`PUT` body `{preferences}`) |
 | `POST` | `/courses` | `{url, preferences}` → `202 {course_id}`: a course from a YouTube playlist (the same playlist and goal reuse the course). Its lectures are checked and queued in a background thread beside the job worker |
+| `POST` | `/courses/combine` | `{title, course_ids}` → `201 {course_id}`: a learning path, the courses' lectures in that order without duplicates, the first course's goal |
 | `POST` | `/courses/group` | `{title, analysis_ids}` → `201 {course_id}`: a course of analyzed videos, in upload order |
 | `GET`  | `/courses` / `/courses/{id}` | `Course`: lectures with their state (`ready`, `other_goal`, `queued`, `analyzing`, `failed`, `missing`), the newest `plan`, `plan_stale` |
 | `DELETE` | `/courses/{id}` | delete a course (its analyses stay) |
@@ -377,6 +379,11 @@ when all of these hold:
 
 The conditions are checked before each start, so a run started at 6:55 finishes
 after 7:00, and a GPU job started at night pauses the queue before the next video.
+During a queued analysis, `CurioService.run(should_pause=...)` asks the GPU probe
+before each pipeline step, at most once a minute (`_every(60, worker.gpu_busy)`; the
+probe takes 5 s, and the queue checked just before starting). If something else is
+using the GPU the run raises `Paused` and goes back to `queued` with the reason as its
+progress; it starts over when the GPU is free (partial work isn't kept).
 The worker remembers the last reason it waited, which `GET /queue` reports.
 
 **Preparing study material.** With `CURIO_QUEUE_PREPARE` (default on), the queued job
@@ -414,8 +421,23 @@ longest option is a giveaway. Measured on the CS329Z playlist (8 questions):
 | separate `right_option` field | 8 of 8 | one "wrong" option was correct |
 | + checking call, character limit | 7 of 8 | |
 | + checking call, word range | 5 of 8, mostly by 3-12% | one clear giveaway (150 vs 114 chars) |
+| + evening-out pass (2026-11-24), on 3-4 lectures of 10-12 questions | 0-2 of 10-12 | first try 9 of 11 by 5-15%; fixed by the 5% threshold, a character minimum and a second round |
 
-Chance is 2 of 8. The checking call costs 10-15 s; the set took 45-75 s in total.
+Chance is a quarter. The checking call costs 10-15 s; a playlist set takes 75-100 s.
+
+**Evening out.** After the checking call, `giveaway(q)` flags a question whose right
+answer is 5% and 6 characters longer than every wrong option. One call (and a second
+for those still flagged) rewrites only the wrong options, to at least the right
+answer's length and at most a third longer, keeping them wrong per the explanation.
+A rewrite is applied only if it clears the flag and no wrong option runs past 1.5x the
+right answer (an earlier version produced dramatic, much longer wrong options, which
+made the plain right answer stand out instead). The right answer is never touched.
+
+**Names the video never says.** A right answer is checked for names (words with a
+digit or an inner capital, and acronyms: GPT-4, ChatGPT, A2A, MCP) against the
+transcript of the sections in scope, ignoring spacing and hyphens. Any name not said
+drops the question, with a warning. Found because a quiz answered "GPT-4" where the
+Tools lecture only ever says ChatGPT.
 
 **Spaced repetition.** Leitner boxes: a card with no state is new (due now).
 "Forgot" puts it in box 1, due in 10 minutes (a lapse if it had been learned);
@@ -447,9 +469,9 @@ with the same inputs and model is reused, and `plan_stale` says lectures changed
    not an optional section under 2 minutes (those only filled leftover seconds, out
    of context). Scores come from each lecture's analysis; half of each is the
    section's rank within its lecture, so they compare across lectures.
-2. Candidates: each item's closest item in another lecture, by cosine of
+2. Candidates: each item's two closest items in other lectures, by cosine of
    `nomic-embed-text` vectors of title, summary, concepts and what it teaches
-   (TF-IDF without an embedder). The closest pairs, up to 4 per lecture (at most 48).
+   (TF-IDF without an embedder). The closest pairs, up to 6 per lecture (at most 72).
 3. Judging, 12 pairs a call: summaries plus about 160 words of transcript from each
    side (the opening and the middle). Verdict `repeat` (watch one), `overlap` (each
    adds something) or `different`, which one to keep, and a reason.
@@ -497,6 +519,17 @@ the playlist), and the Repeats tab shows them. On CS329Z, a 3-hour build compare
 crossed the budget), 11 overlaps, 14 different. Builds that showed no left-out
 repeats were run-to-run variation in the verdicts plus a long budget, not a broken
 check. Reasons name lectures by their labels ("Lecture 8 adds…").
+
+**More pairs (2026-11-24).** Two matches per section and 6 pairs a lecture: a
+3-hour CS329Z build compared 42 pairs (was 28) in 117 s and judged 18 overlaps, 24
+different, 0 repeats. The pairs judged repeats before (context engineering in Lectures
+2 and 6, skills in 6 and 7) were judged overlaps this time, each with a specific
+"adds" (KV-cache invalidation; skills vs tools). The line between repeat and overlap
+is a judgment call that varies run to run; overlapping sections both stay eligible,
+which is the safer error.
+
+**Learning paths.** `combine_courses` makes a course from several courses' lectures in
+order; everything above then works across courses.
 
 **Course quiz and flashcards.** A study set per lecture with scope `course`: its
 `segment_ids` are the section ids the course playlist uses from that lecture, and its

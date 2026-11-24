@@ -32,6 +32,7 @@ from curio_learn.storage.orm import (
     CourseQuestionRow,
     CourseRow,
     CourseWatchedRow,
+    CustomPlaylistRow,
     EmbeddingRow,
     NotesRow,
     QuestionRow,
@@ -297,6 +298,13 @@ class Repository:
                 .values(status=AnalysisStatus.PENDING.value, progress=progress, updated_at=datetime.now(UTC))
             )
             return result.rowcount == 1
+
+    def requeue(self, analysis_id: str, progress: str) -> None:
+        """Put a paused analysis back in the queue (it starts over when it runs again)."""
+        with self.session() as db, db.begin():
+            row = db.get(AnalysisRow, analysis_id)
+            if row is not None:
+                row.status, row.progress, row.error = AnalysisStatus.QUEUED.value, progress, ""
 
     def set_queued_preferences(self, analysis_id: str, prefs: LearningPreferences) -> bool:
         """Change the goal of an analysis that is still waiting in the queue."""
@@ -947,3 +955,19 @@ class Repository:
     def clear_course_answers(self, course_id: str) -> int:
         with self.session() as db, db.begin():
             return db.execute(delete(CourseQuestionRow).where(CourseQuestionRow.course_id == course_id)).rowcount
+
+    def custom_playlist(self, analysis_id: str) -> list[str] | None:
+        with self.session() as db:
+            row = db.get(CustomPlaylistRow, analysis_id)
+            return list(row.segment_ids) if row else None
+
+    def set_custom_playlist(self, analysis_id: str, segment_ids: list[str] | None) -> None:
+        with self.session() as db, db.begin():
+            row = db.get(CustomPlaylistRow, analysis_id)
+            if segment_ids is None:
+                if row is not None:
+                    db.delete(row)
+            elif row is None:
+                db.add(CustomPlaylistRow(analysis_id=analysis_id, segment_ids=segment_ids))
+            else:
+                row.segment_ids = segment_ids

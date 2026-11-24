@@ -254,3 +254,29 @@ def test_queued_job_analyzes_then_prepares(service):
     assert w.tick() == other
     _run_queued(service, other, w)
     assert service.get(other).status is AnalysisStatus.DONE and not service.list_notes(other)
+
+
+def test_a_queued_analysis_pauses_when_the_gpu_gets_busy(service):
+    from curio_learn.errors import Paused
+
+    analysis_id, _ = service.submit(URL, LearningPreferences(), queue=True)
+    w, _ = worker(service)
+    assert w.tick() == analysis_id
+    answers = iter(["", "", "The GPU is in use (85% busy)."])
+    with pytest.raises(Paused):
+        service.run(analysis_id, should_pause=lambda: next(answers, ""))
+    a = service.get(analysis_id)
+    assert a.status is AnalysisStatus.QUEUED and a.progress == "Paused: The GPU is in use (85% busy)."
+    assert w.status().items[0].progress.startswith("Paused")
+    # Later, with the GPU free, it starts over and finishes.
+    assert w.tick() == analysis_id
+    service.run(analysis_id)
+    assert service.get(analysis_id).status is AnalysisStatus.DONE
+
+
+def test_pause_checks_are_throttled():
+    from curio_learn.api.app import _every
+
+    calls = []
+    check = _every(60.0, lambda: calls.append(1) or "busy")
+    assert check() == "" and calls == []  # the queue checked the GPU just before starting

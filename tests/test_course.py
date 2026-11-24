@@ -294,3 +294,22 @@ def test_api_course_practice(service):
         body = client.get(f"/api/v1/courses/{course_id}/practice").json()
         assert body["status"] == "done" and body["questions"] > 0
         assert client.get(f"/api/v1/flashcards?course_id={course_id}").json()["total"] == body["cards"]
+
+
+def test_combine_courses_into_a_learning_path(service):
+    a, b = analyze(service, VIDS[0]), analyze(service, VIDS[1])
+    first = service.import_course(PLAYLIST, TECH)  # lectures 1, 2 and a guest lecture
+    second = service.group_course("Other", [b, a])
+    with pytest.raises(AnalysisError):
+        service.combine_courses("", [first])
+    path = service.combine_courses("", [second, first])
+    course = service.course(path)
+    # The second course's videos come first, and each video appears once.
+    assert [lec.video_id for lec in course.lectures] == [VIDS[0], VIDS[1], VIDS[2]]
+    assert course.title == "Other + Test Course" and course.preferences == service.course(second).preferences
+    plan = service.course_plan(path, minutes=10)
+    assert plan.status is AnalysisStatus.DONE
+    with TestClient(create_app(service)) as client:
+        r = client.post("/api/v1/courses/combine", json={"title": "Path", "course_ids": [first, second]})
+        assert r.status_code == 201 and client.get(f"/api/v1/courses/{r.json()['course_id']}").json()["title"] == "Path"
+        assert client.post("/api/v1/courses/combine", json={"course_ids": [first, "nope"]}).status_code == 404

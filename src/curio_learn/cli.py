@@ -87,6 +87,11 @@ def main(argv: list[str] | None = None) -> int:
     co.add_argument("--minutes", type=int, default=None, help="Course playlist length (default: ~15 min a lecture)")
     co.add_argument("--force", action="store_true", help="Build a new course playlist even if a saved one exists")
 
+    sub.add_parser(
+        "check-claude",
+        help="Make one tiny request to Claude to check the API key, model and structured output (costs < $0.01)",
+    )
+
     api = sub.add_parser("api", help="Run the API server (also serves the built web UI)")
     # All interfaces, so phones and laptops on the LAN can use it. --host 127.0.0.1 keeps it local.
     api.add_argument("--host", default="0.0.0.0")
@@ -138,6 +143,8 @@ def main(argv: list[str] | None = None) -> int:
         for w in notes.warnings:
             print(f"Warning: {w}", file=sys.stderr)
         return 0
+    if args.cmd == "check-claude":
+        return check_claude(settings)
     if args.cmd == "course":
         from curio_learn.service import CurioService
 
@@ -314,4 +321,43 @@ def run_course(args, service) -> int:
             print(f"  - {item.text} ({where})")
     for w in plan.warnings:
         print(f"Warning: {w}", file=sys.stderr)
+    return 0
+
+
+def check_claude(settings) -> int:
+    """One small structured request through the same provider the pipeline uses."""
+    from pydantic import BaseModel
+
+    from curio_learn.llm.anthropic_provider import AnthropicProvider
+    from curio_learn.llm.base import generate_structured
+
+    class Check(BaseModel):
+        capital: str
+
+    # CURIO_LLM_MODEL may name a local model; only use it when Claude is the provider.
+    model = settings.llm_model if settings.resolved_provider == "anthropic" and settings.llm_model else None
+    model = model or settings.anthropic_default_model
+    print(f"Asking {model} one short question…", flush=True)
+    try:
+        out = generate_structured(
+            AnthropicProvider(effort="low"),
+            Check,
+            model=model,
+            system="Answer in the requested JSON.",
+            user="What is the capital of France?",
+            max_tokens=200,
+            retries=0,
+            task="check-claude",
+        )
+    except CurioError as exc:
+        print(f"Claude is not working: {exc.message}", file=sys.stderr)
+        return 1
+    except Exception as exc:  # e.g. no credentials at all
+        if "authentication method" in str(exc):
+            print("No Claude credentials: set ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN).", file=sys.stderr)
+        else:
+            print(f"Claude is not working: {exc}", file=sys.stderr)
+        return 1
+    print(f"Claude works: structured answer {out.model_dump()}.")
+    print("Set CURIO_LLM_PROVIDER=anthropic (or leave it on auto with ANTHROPIC_API_KEY set) to use it.")
     return 0

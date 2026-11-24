@@ -60,6 +60,7 @@ export function CourseList({ courses, recent }: { courses: Course[]; recent: Rec
           </li>
         ))}
       </ul>
+      {courses.length >= 2 && <CombineCourses courses={courses} />}
       {recent.length >= 2 && (
         <details className="courses__group">
           <summary>Make a course from videos you've analyzed</summary>
@@ -100,5 +101,68 @@ export function CourseList({ courses, recent }: { courses: Course[]; recent: Rec
         </details>
       )}
     </section>
+  )
+}
+
+/** A learning path: several courses as one, in the order picked. */
+function CombineCourses({ courses }: { courses: Course[] }) {
+  const [order, setOrder] = useState<string[]>([])
+  const [title, setTitle] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+
+  const toggle = (id: string, on: boolean) => setOrder((o) => (on ? [...o, id] : o.filter((x) => x !== id)))
+
+  const make = async () => {
+    setBusy(true)
+    setErr('')
+    try {
+      const { course_id } = await api.combineCourses(title, order)
+      navigate(`/c/${course_id}`)
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : 'Could not combine the courses.')
+      setBusy(false)
+    }
+  }
+
+  return (
+    <details className="courses__group">
+      <summary>Combine courses into a learning path</summary>
+      <p className="hint">
+        Tick courses in the order to take them. The path is a course of its own: one playlist across all their
+        lectures that leaves out what one teaches again, its checklist, questions and quiz.
+      </p>
+      <ul className="courses__pick">
+        {courses.map((c) => (
+          <li key={c.id}>
+            <label className="checkbox">
+              <input type="checkbox" checked={order.includes(c.id)} onChange={(e) => toggle(c.id, e.target.checked)} />
+              {order.includes(c.id) && <span className="menu__count">{order.indexOf(c.id) + 1}</span>}
+              {c.title}
+            </label>
+          </li>
+        ))}
+      </ul>
+      <div className="courses__group-row">
+        <label className="visually-hidden" htmlFor="path-title">
+          Learning path name
+        </label>
+        <input
+          id="path-title"
+          type="text"
+          placeholder="Name (optional)"
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+        />
+        <button type="button" className="button-primary" onClick={make} disabled={busy || order.length < 2}>
+          {busy ? 'Combining…' : 'Make the learning path'}
+        </button>
+      </div>
+      {err && (
+        <p className="form-error" role="alert">
+          {err}
+        </p>
+      )}
+    </details>
   )
 }

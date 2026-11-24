@@ -31,3 +31,9 @@ class LLMError(CurioError):
 
 class AnalysisError(CurioError):
     code = "analysis_error"
+
+
+class Paused(CurioError):
+    """A queued analysis stopped because something else started using the GPU."""
+
+    code = "paused"

@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import random
+import re
 import time
 from collections.abc import Callable, Sequence
 from datetime import datetime, timedelta
@@ -119,11 +120,105 @@ def clean_question(q: QuestionOut) -> tuple[str, list[str], int] | None:
     return text, options, options.index(right)
 
 
+# Names a right answer can make up: a word with a digit or a capital inside it (GPT-4,
+# ChatGPT, MemGPT, A2A) or an acronym (RAG, MCP). Plain words aren't checked.
+_NAME_RE = re.compile(r"\b(?:[A-Za-z]+\d[\w.-]*|\d+[A-Za-z][\w-]*|[A-Za-z]+[A-Z][\w-]*|[A-Z]{2,}[\w-]*)")
+
+
+def _squash(text: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", text.lower())
+
+
+def unsupported_names(text: str, source: str) -> list[str]:
+    """Names in `text` that the transcript `source` never says (spacing and hyphens
+    ignored, so "GPT 4" matches "GPT-4")."""
+    said = _squash(source)
+    return [n for n in dict.fromkeys(_NAME_RE.findall(text)) if _squash(n) and _squash(n) not in said]
+
+
 def word_range(q: QuizQuestion) -> tuple[int, int]:
     """Words every option should have: around the longest wrong option, 6-18 words."""
     longest_wrong = max(len(o.split()) for i, o in enumerate(q.options) if i != q.answer)
     target = min(max(longest_wrong, 6), 16)
     return target - 2, target + 2
+
+
+def giveaway(q: QuizQuestion) -> bool:
+    """The right answer is noticeably the longest option: 5% and 6 characters longer
+    than every wrong one (a learner who spots the pattern can guess)."""
+    right = len(q.options[q.answer])
+    longest = max(len(o) for i, o in enumerate(q.options) if i != q.answer)
+    return right > 1.05 * longest and right - longest >= 6
+
+
+class PaddedQuestionOut(BaseModel):
+    id: str
+    wrong_options: list[str]
+
+
+class QuizPadOut(BaseModel):
+    questions: list[PaddedQuestionOut]
+
+
+def even_out(
+    provider: LLMProvider, *, model: str, questions: list[QuizQuestion], retries: int = 2, rounds: int = 2
+) -> int:
+    """Rewrite the wrong options of the questions whose right answer gives itself away
+    by length, in up to `rounds` calls (the second for those still flagged). The right
+    answer is never changed; a rewrite is kept only when it closes the gap. Updates
+    `questions` in place; returns how many were fixed."""
+    fixed = 0
+    for _ in range(rounds):
+        flagged = [q for q in questions if giveaway(q)]
+        if not flagged:
+            break
+        fixed += _even_out_once(provider, model=model, flagged=flagged, retries=retries)
+    return fixed
+
+
+def _even_out_once(provider: LLMProvider, *, model: str, flagged: list[QuizQuestion], retries: int) -> int:
+    blocks = []
+    for q in flagged:
+        wrong = [o for i, o in enumerate(q.options) if i != q.answer]
+        blocks.append(
+            f"id: {q.id}\nquestion: {q.question}\nright answer: {q.options[q.answer]}\n"
+            f"target length: {len(q.options[q.answer].split())} words, at least "
+            f"{len(q.options[q.answer])} characters\nwrong options: "
+            + " | ".join(wrong)
+            + f"\nexplanation: {q.explanation}"
+        )
+    out = generate_structured(
+        provider,
+        QuizPadOut,
+        model=model,
+        system=prompts.QUIZ_PAD_SYSTEM,
+        user=prompts.quiz_pad_user(questions="\n\n".join(blocks)),
+        max_tokens=150 * len(flagged) + 300,
+        retries=retries,
+        task="study[even out]",
+    )
+    by_id = {q.id: q for q in flagged}
+    fixed = 0
+    for r in out.questions:
+        q = by_id.get(r.id.strip().lower())
+        if q is None:
+            continue
+        right = q.options[q.answer]
+        cleaned = clean_question(
+            QuestionOut(
+                question=q.question, wrong_options=r.wrong_options, right_option=right, explanation="", sentence=0
+            )
+        )
+        if cleaned is None:
+            continue
+        _, options, answer = cleaned
+        candidate = q.model_copy(update={"options": options, "answer": answer})
+        # Not overshooting either: much longer wrong options make the right one stand out.
+        overshoot = max(len(o) for i, o in enumerate(options) if i != answer) > 1.5 * len(right)
+        if not giveaway(candidate) and not overshoot:
+            q.options, q.answer = options, answer
+            fixed += 1
+    return fixed
 
 
 def _too_long(q: QuizQuestion) -> bool:
@@ -297,6 +392,34 @@ def generate_study(
             log.info("Quiz review changed %d of %d questions; %d still longest", changed, len(questions), long_left)
         except LLMError as exc:
             warnings.append(f"Couldn't double-check the questions ({exc}).")
+        if any(giveaway(q) for q in questions):
+            progress("Evening out answer lengths")
+            try:
+                fixed = even_out(provider, model=model, questions=questions, retries=retries)
+                log.info(
+                    "Evened out %d question(s); %d still give the answer away",
+                    fixed,
+                    sum(giveaway(q) for q in questions),
+                )
+            except LLMError as exc:
+                warnings.append(f"Couldn't even out answer lengths ({exc}).")
+    # The right answers must not name anything the video doesn't say (the review pass
+    # may reword them).
+    said = " ".join(u.text for su in units_by.values() for u in su)
+    grounded = [q for q in questions if not unsupported_names(q.options[q.answer], said)]
+    made_up = len(questions) - len(grounded)
+    if made_up:
+        for q in questions:
+            if q not in grounded:
+                log.info(
+                    "Dropped %s: names %s, which the video doesn't say",
+                    q.id,
+                    unsupported_names(q.options[q.answer], said),
+                )
+        questions[:] = grounded
+        for i, q in enumerate(questions, 1):
+            q.id = f"q{i}"
+        warnings.append(f"Dropped {made_up} question(s) whose answer named something the video doesn't say.")
     if bad_questions:
         warnings.append(f"Dropped {bad_questions} question(s) without a valid set of options.")
     if bad_refs:

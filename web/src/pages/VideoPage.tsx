@@ -156,8 +156,16 @@ type Tab = 'notes' | 'practice' | 'ask' | 'more' | 'skip' | 'scoring'
 
 function Results({ analysis }: { analysis: Analysis }) {
   const playlist = analysis.playlist!
-  const segs = playlist.segments
-  const others = analysis.segments.filter((s) => !s.in_playlist)
+  // The learner's own playlist, when they saved one; `useMine` switches between it and Curio's.
+  const [custom, setCustom] = useState<string[] | null>(null)
+  const [useMine, setUseMine] = useState(true)
+  const [editing, setEditing] = useState(false)
+  useEffect(() => {
+    api.customPlaylist(analysis.id).then((r) => setCustom(r.segment_ids), () => {})
+  }, [analysis.id])
+  const mine = custom && useMine ? analysis.segments.filter((s) => custom.includes(s.id)) : null
+  const segs = mine ?? playlist.segments
+  const others = analysis.segments.filter((s) => !segs.some((x) => x.id === s.id))
   const [completed, setCompleted] = useState<Set<string>>(new Set())
   const [currentId, setCurrentId] = useState<string | null>(segs[0]?.id ?? others[0]?.id ?? null)
   const [clip, setClip] = useState<Clip | null>(() => {
@@ -183,7 +191,7 @@ function Results({ analysis }: { analysis: Analysis }) {
     start_s: s.section.start_s,
     end_s: s.section.end_s,
     importance: s.importance,
-    in_playlist: bySection.get(s.section.id)?.in_playlist ?? false,
+    in_playlist: segs.some((x) => x.id === bySection.get(s.section.id)?.id),
     title: s.section.title,
   }))
   const current = analysis.segments.find((s) => s.id === currentId) ?? null
@@ -287,8 +295,38 @@ function Results({ analysis }: { analysis: Analysis }) {
         <aside className="playlist" aria-labelledby="playlist-heading">
           <h2 id="playlist-heading">Your playlist</h2>
           <p className="muted">
-            {segs.length} parts, {duration(playlist.total_s)}. {done} of {segs.length} watched.
+            {segs.length} parts, {duration(segs.reduce((n, s) => n + s.duration_s, 0))}. {done} of {segs.length}{' '}
+            watched.
           </p>
+          <div className="playlist__tools">
+            {custom && (
+              <fieldset className="segmented playlist__which">
+                <legend className="visually-hidden">Which playlist</legend>
+                <label className="segmented__option">
+                  <input type="radio" name="which-playlist" checked={useMine} onChange={() => setUseMine(true)} />
+                  <span>Yours</span>
+                </label>
+                <label className="segmented__option">
+                  <input type="radio" name="which-playlist" checked={!useMine} onChange={() => setUseMine(false)} />
+                  <span>Curio's picks</span>
+                </label>
+              </fieldset>
+            )}
+            <button type="button" className="button-quiet" onClick={() => setEditing((e) => !e)} aria-expanded={editing}>
+              {editing ? 'Close' : 'Edit the playlist'}
+            </button>
+          </div>
+          {editing && (
+            <PlaylistEditor
+              analysis={analysis}
+              current={segs.map((s) => s.id)}
+              onSaved={(ids) => {
+                setCustom(ids)
+                setUseMine(true)
+                setEditing(false)
+              }}
+            />
+          )}
           <ol className="playlist__list">
             {segs.map((seg, i) => (
               <li key={seg.id}>
@@ -378,6 +416,80 @@ function Results({ analysis }: { analysis: Analysis }) {
         </div>
       </section>
     </main>
+  )
+}
+
+/** Pick the parts of your own playlist from every watchable part of the video. */
+function PlaylistEditor(props: { analysis: Analysis; current: string[]; onSaved: (ids: string[] | null) => void }) {
+  const { analysis } = props
+  const [picked, setPicked] = useState<Set<string>>(() => new Set(props.current))
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  const all = [...analysis.segments].sort((a, b) => a.start_s - b.start_s)
+  const total = all.filter((s) => picked.has(s.id)).reduce((n, s) => n + s.duration_s, 0)
+
+  const save = async (ids: string[] | null) => {
+    setBusy(true)
+    setErr('')
+    try {
+      const r = await api.setCustomPlaylist(analysis.id, ids)
+      props.onSaved(r.segment_ids)
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : 'Could not save the playlist.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="editor">
+      <p className="hint">
+        Tick the parts you want to watch. Parts Curio picked are marked; the rest are the parts it left for when you
+        have more time.
+      </p>
+      <ul className="editor__list">
+        {all.map((s) => (
+          <li key={s.id}>
+            <label className="editor__row">
+              <input
+                type="checkbox"
+                checked={picked.has(s.id)}
+                onChange={(e) =>
+                  setPicked((prev) => {
+                    const next = new Set(prev)
+                    if (e.target.checked) next.add(s.id)
+                    else next.delete(s.id)
+                    return next
+                  })
+                }
+              />
+              <span className="editor__time">{clock(s.start_s)}</span>
+              <span>
+                {s.title}
+                <span className="muted">
+                  {' '}
+                  {duration(s.duration_s)}
+                  {s.in_playlist ? ", Curio's pick" : ''}
+                </span>
+              </span>
+            </label>
+          </li>
+        ))}
+      </ul>
+      {err && (
+        <p className="form-error" role="alert">
+          {err}
+        </p>
+      )}
+      <div className="editor__actions">
+        <button type="button" className="button-primary" disabled={busy || picked.size === 0} onClick={() => save([...picked])}>
+          Save my playlist ({duration(total)})
+        </button>
+        <button type="button" className="button-quiet" disabled={busy} onClick={() => save(null)}>
+          Go back to Curio's picks
+        </button>
+      </div>
+    </div>
   )
 }
 

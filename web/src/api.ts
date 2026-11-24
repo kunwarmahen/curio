@@ -456,6 +456,13 @@ export const api = {
     request<{ analysis_id: string; status: Status }>(`/queue/${encodeURIComponent(id)}/start`, { method: 'POST' }),
   queueRemove: (id: string) => request<{ removed: string }>(`/queue/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   analysis: (id: string) => request<Analysis>(`/analyses/${encodeURIComponent(id)}`),
+  customPlaylist: (id: string) =>
+    request<{ segment_ids: string[] | null }>(`/analyses/${encodeURIComponent(id)}/custom-playlist`),
+  setCustomPlaylist: (id: string, segmentIds: string[] | null) =>
+    request<{ segment_ids: string[] | null }>(`/analyses/${encodeURIComponent(id)}/custom-playlist`, {
+      method: 'PUT',
+      body: JSON.stringify({ segment_ids: segmentIds }),
+    }),
   completed: (id: string) => request<string[]>(`/analyses/${encodeURIComponent(id)}/completed`),
   setCompleted: (id: string, segmentId: string, completed: boolean) =>
     request(`/analyses/${encodeURIComponent(id)}/segments/${encodeURIComponent(segmentId)}/completed`, {
@@ -519,6 +526,11 @@ export const api = {
     request<{ course_id: string }>('/courses/group', {
       method: 'POST',
       body: JSON.stringify({ title, analysis_ids: analysisIds }),
+    }),
+  combineCourses: (title: string, courseIds: string[]) =>
+    request<{ course_id: string }>('/courses/combine', {
+      method: 'POST',
+      body: JSON.stringify({ title, course_ids: courseIds }),
     }),
   deleteCourse: (id: string) => request<{ deleted: string }>(`/courses/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   refreshCourse: (id: string) =>

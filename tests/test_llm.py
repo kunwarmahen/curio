@@ -121,6 +121,25 @@ def test_anthropic_request_shape():
     assert "temperature" not in captured
 
 
+def test_anthropic_logs_a_fallback(caplog):
+    msg = _message('{"value": 1}')
+    msg.model = "claude-opus-5"
+    msg.usage.iterations = [SimpleNamespace(type="message"), SimpleNamespace(type="fallback_message")]
+    p = AnthropicProvider(client=_fake_client(msg, {}))
+    with caplog.at_level("WARNING"):
+        p.complete_json(model="claude-opus-5-5", system="s", user="u", schema={}, max_tokens=10)
+    assert "claude-opus-5 answered instead" in caplog.text
+
+
+def test_auth_token_selects_claude(monkeypatch, settings):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "x")
+    settings.llm_provider = "auto"
+    assert settings.resolved_provider == "anthropic"
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN")
+    assert settings.resolved_provider == "ollama"
+
+
 def test_anthropic_refusal_is_an_error():
     p = AnthropicProvider(client=_fake_client(_message("", stop="refusal"), {}))
     with pytest.raises(LLMError, match="declined"):

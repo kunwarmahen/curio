@@ -41,7 +41,7 @@ from curio_learn.domain import (
     VideoAnalysis,
     VideoMetadata,
 )
-from curio_learn.errors import AnalysisError, CurioError, InvalidURL
+from curio_learn.errors import AnalysisError, CurioError, InvalidURL, Paused
 from curio_learn.ingestion.metadata import MetadataProvider, YtDlpMetadataProvider
 from curio_learn.ingestion.playlist import (
     PlaylistProvider,
@@ -64,9 +64,9 @@ PIPELINE_VERSION = 5
 # Bump when notes generation changes should invalidate saved notes.
 NOTES_VERSION = 1
 # Bump when quiz and flashcard generation changes should invalidate saved sets.
-STUDY_VERSION = 2
+STUDY_VERSION = 3
 # Bump when course playlist building changes should invalidate saved plans.
-COURSE_VERSION = 1
+COURSE_VERSION = 2
 # Course playlist lengths offered, in minutes; the default is about 15 minutes a lecture.
 COURSE_MINUTES = (60, 90, 120, 180, 240, 360)
 
@@ -203,12 +203,24 @@ class CurioService:
                 updated.append(analysis_id)
         return {"updated": updated, "already_analyzed": merged}
 
-    def run(self, analysis_id: str, progress: Progress = lambda _: None) -> VideoAnalysis:
+    def run(
+        self,
+        analysis_id: str,
+        progress: Progress = lambda _: None,
+        *,
+        should_pause: Callable[[], str] = lambda: "",
+    ) -> VideoAnalysis:
+        """Analyze a registered video. `should_pause` is asked before each step (the
+        queue passes its GPU check): a reason pauses the run, which goes back into the
+        queue and raises `Paused`."""
         pending = self.repo.get_analysis(analysis_id)
         if pending is None:
             raise KeyError(analysis_id)
 
         def report(msg: str) -> None:
+            reason = should_pause()
+            if reason:
+                raise Paused(reason)
             log.info("[%s] %s", analysis_id, msg)
             self.repo.update_status(analysis_id, AnalysisStatus.RUNNING, msg)
             progress(msg)
@@ -221,6 +233,10 @@ class CurioService:
             result.created_at = pending.created_at
             self.repo.save_result(result)
             return result
+        except Paused as exc:
+            log.info("[%s] Paused, back in the queue: %s", analysis_id, exc.message)
+            self.repo.requeue(analysis_id, f"Paused: {exc.message}")
+            raise
         except CurioError as exc:
             self.repo.update_status(analysis_id, AnalysisStatus.FAILED, error=exc.message)
             raise
@@ -265,6 +281,35 @@ class CurioService:
 
     def completed(self, analysis_id: str) -> set[str]:
         return self.repo.completed_segments(analysis_id)
+
+    # --------------------------------------------------------- custom playlists
+
+    def custom_playlist(self, analysis_id: str) -> list[str] | None:
+        """The learner's own playlist (segment ids in time order), or None for Curio's."""
+        return self.repo.custom_playlist(analysis_id)
+
+    def set_custom_playlist(self, analysis_id: str, segment_ids: list[str] | None) -> list[str] | None:
+        """Save the learner's playlist; None (or Curio's exact picks) goes back to Curio's."""
+        analysis = self.repo.get_analysis(analysis_id)
+        if analysis is None:
+            raise KeyError(analysis_id)
+        if analysis.status != AnalysisStatus.DONE:
+            raise AnalysisError("A playlist can be edited once the analysis has finished.")
+        if segment_ids is None:
+            self.repo.set_custom_playlist(analysis_id, None)
+            return None
+        by_id = {s.id: s for s in analysis.segments}
+        unknown = set(segment_ids) - set(by_id)
+        if unknown:
+            raise AnalysisError(f"Unknown segment ids: {', '.join(sorted(unknown))}.")
+        if not segment_ids:
+            raise AnalysisError("Keep at least one part in your playlist.")
+        ids = sorted(set(segment_ids), key=lambda i: by_id[i].start_s)
+        curated = [s.id for s in analysis.segments if s.in_playlist]
+        if ids == sorted(curated, key=lambda i: by_id[i].start_s):
+            ids = None  # the same as Curio's picks
+        self.repo.set_custom_playlist(analysis_id, ids)
+        return ids
 
     # ------------------------------------------------------------------- notes
 
@@ -750,6 +795,31 @@ class CurioService:
                 {"video_id": a.video.video_id, "title": a.video.title, "duration_s": a.video.duration_s}
                 for a in analyses
             ],
+        )
+        return course_id
+
+    def combine_courses(self, title: str, course_ids: list[str]) -> str:
+        """A learning path: one course with the lectures of several, in the order given
+        (a video in two of them comes once, at its first place), and the first one's goal."""
+        courses = [self.repo.get_course(cid) for cid in dict.fromkeys(course_ids)]
+        if any(c is None for c in courses):
+            raise KeyError("course")
+        if len(courses) < 2:
+            raise AnalysisError("Pick at least two courses to combine.")
+        lectures, seen = [], set()
+        for c in courses:
+            for lec in c["lectures"]:
+                if lec["video_id"] not in seen:
+                    seen.add(lec["video_id"])
+                    lectures.append(lec)
+        course_id = uuid.uuid4().hex[:12]
+        self.repo.create_course(
+            course_id,
+            title=title.strip() or " + ".join(c["title"] for c in courses),
+            channel="",
+            playlist_id="",
+            prefs=courses[0]["preferences"],
+            lectures=lectures,
         )
         return course_id
 

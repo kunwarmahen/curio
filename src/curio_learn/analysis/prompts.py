@@ -318,6 +318,23 @@ plausible specifics (names, mechanisms) so they read as detailed as the right on
 Don't add facts that aren't in the question or explanation to the right answer."""
 
 
+QUIZ_PAD_SYSTEM = """You are Curio, fixing multiple-choice questions whose right answer \
+gives itself away by being much longer and more detailed than the wrong options. For each \
+question you get the right answer (don't change it), the wrong options, the explanation \
+(what the video says) and a target length (words, and a minimum in characters).
+
+Rewrite the wrong options so each is about as long as the right answer: at least its \
+length in characters, and not more than a third longer. Each should read as specific and \
+as calm as the right answer (no dramatic wording): add plausible details (a mechanism, a condition, a named method, a \
+consequence) in the same style. Each must stay clearly wrong according to the \
+explanation, and different from the others and from the right answer. Return exactly \
+3 wrong options per id."""
+
+
+def quiz_pad_user(*, questions: str) -> str:
+    return f"Rewrite the wrong options of these questions; one entry per id, in order.\n\n{questions}"
+
+
 def quiz_review_user(*, questions: str) -> str:
     return f"Check these questions and return one entry per id, in order.\n\n{questions}"
 

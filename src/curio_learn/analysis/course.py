@@ -5,8 +5,8 @@
    half of each is the section's rank within its lecture, so they compare across
    lectures.
 2. Find sections in different lectures that may teach the same thing: embedding
-   similarity of title, summary and concepts (TF-IDF without an embedder), best match
-   per section, the closest pairs first.
+   similarity of title, summary and concepts (TF-IDF without an embedder), the two
+   best matches per section, the closest pairs first (up to 6 a lecture).
 3. The LLM judges those pairs from summaries and transcript excerpts: repeat (watch
    one), overlap (both add something) or different, and which one to keep.
 4. One selection across the course (the same selector as a lecture's playlist): a
@@ -166,16 +166,15 @@ def _similarities(items: list[Item], embedder: Embedder | None) -> list[list[flo
     return similarity_matrix(texts)
 
 
-def candidate_pairs(items: list[Item], sim: list[list[float]], *, max_pairs: int) -> list[Pair]:
-    """Each section's closest section in another lecture; the closest pairs overall."""
+def candidate_pairs(items: list[Item], sim: list[list[float]], *, max_pairs: int, per_item: int = 2) -> list[Pair]:
+    """Each section's closest sections in other lectures (`per_item` of them); the
+    closest pairs overall."""
     best: dict[tuple[int, int], float] = {}
     for i, it in enumerate(items):
         others = [j for j, o in enumerate(items) if o.lecture.position != it.lecture.position]
-        if not others:
-            continue
-        j = max(others, key=lambda j: sim[i][j])
-        a, b = sorted((i, j), key=lambda k: (items[k].lecture.position, items[k].section.start_s))
-        best[(a, b)] = sim[i][j]
+        for j in sorted(others, key=lambda j: -sim[i][j])[:per_item]:
+            a, b = sorted((i, j), key=lambda k: (items[k].lecture.position, items[k].section.start_s))
+            best[(a, b)] = sim[i][j]
     ranked = sorted(best.items(), key=lambda kv: -kv[1])[:max_pairs]
     return [Pair(f"p{n}", items[a], items[b], s) for n, ((a, b), s) in enumerate(ranked, 1)]
 
@@ -358,7 +357,7 @@ def build_course_plan(
     pairs: list[Pair] = []
     if len(lectures) > 1 and items:
         sim = _similarities(items, embedder)
-        pairs = candidate_pairs(items, sim, max_pairs=min(48, max(12, 4 * len(lectures))))
+        pairs = candidate_pairs(items, sim, max_pairs=min(72, max(16, 6 * len(lectures))))
         try:
             missing = judge_pairs(provider, pairs, model=model, shared=shared, retries=retries, progress=progress)
             if missing:
