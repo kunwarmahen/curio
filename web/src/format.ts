@@ -34,3 +34,15 @@ export const IMPORTANCE_LABEL: Record<Importance, string> = {
   optional: 'Optional',
   skip: 'Skip',
 }
+
+/** "01:00" -> "1 AM", "22:30" -> "10:30 PM" (in the viewer's locale). */
+export function localTime(hhmm: string): string {
+  const [h, m] = hhmm.split(':').map(Number)
+  const d = new Date(2000, 0, 1, h, m)
+  return d.toLocaleTimeString([], { hour: 'numeric', minute: m ? '2-digit' : undefined })
+}
+
+/** When queued videos are analyzed: "between 1 AM and 7 AM" or "whenever". */
+export function queueHours(start: string, end: string): string {
+  return start ? `between ${localTime(start)} and ${localTime(end)}` : 'at any time'
+}

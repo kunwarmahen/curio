@@ -70,6 +70,16 @@ class Settings(BaseSettings):
     # Embedding model (on Ollama) for searching long transcripts. Empty = keyword search only.
     embed_model: str = "nomic-embed-text"
 
+    # --- Overnight queue -------------------------------------------------------
+    # Local hours when queued videos are analyzed, e.g. "1-7" or "22:30-6".
+    # Empty = any time the GPU is idle.
+    queue_hours: str = "1-7"
+    # The GPU counts as in use at or above this utilization (median of 5 nvidia-smi
+    # readings). A desktop idles at 0-5% with brief spikes; generation and games run at 80-100%.
+    queue_gpu_busy_percent: float = 20.0
+    # How often the API server checks the queue, in seconds. 0 turns the queue worker off.
+    queue_check_s: float = 60.0
+
     # --- Transcripts -----------------------------------------------------------
     transcript_languages: str = "en,en-US,en-GB"
 

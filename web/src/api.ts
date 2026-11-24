@@ -2,7 +2,7 @@
 
 export type Importance = 'essential' | 'recommended' | 'optional' | 'skip'
 export type Profile = 'general' | 'beginner' | 'technical' | 'executive' | 'deep_dive'
-export type Status = 'pending' | 'running' | 'done' | 'failed'
+export type Status = 'queued' | 'pending' | 'running' | 'done' | 'failed'
 export type SectionKind =
   | 'core' | 'example' | 'demo' | 'intro' | 'recap' | 'tangent' | 'sponsor' | 'qa' | 'meta' | 'outro'
 
@@ -186,6 +186,25 @@ export interface Answer {
   elapsed_s: number
 }
 
+export interface QueueItem {
+  analysis_id: string
+  video: VideoMetadata
+  preferences: Preferences
+  status: Status
+  progress: string
+  added_at: string
+}
+
+export interface QueueStatus {
+  /** Local "HH:MM"; both empty when the queue runs any time the GPU is idle. */
+  window_start: string
+  window_end: string
+  state: 'empty' | 'busy' | 'waiting_window' | 'waiting_gpu' | 'starting'
+  message: string
+  next_start: string | null
+  items: QueueItem[]
+}
+
 export class ApiError extends Error {
   code: string
   constructor(code: string, message: string) {
@@ -216,11 +235,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  analyze: (url: string, preferences: Preferences, force = false) =>
+  analyze: (url: string, preferences: Preferences, force = false, queue = false) =>
     request<{ analysis_id: string; status: Status }>('/analyses', {
       method: 'POST',
-      body: JSON.stringify({ url, preferences, force }),
+      body: JSON.stringify({ url, preferences, force, queue }),
     }),
+  queue: () => request<QueueStatus>('/queue'),
+  queueStart: (id: string) =>
+    request<{ analysis_id: string; status: Status }>(`/queue/${encodeURIComponent(id)}/start`, { method: 'POST' }),
+  queueRemove: (id: string) => request<{ removed: string }>(`/queue/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   analysis: (id: string) => request<Analysis>(`/analyses/${encodeURIComponent(id)}`),
   completed: (id: string) => request<string[]>(`/analyses/${encodeURIComponent(id)}/completed`),
   setCompleted: (id: string, segmentId: string, completed: boolean) =>

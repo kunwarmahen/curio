@@ -9,6 +9,7 @@
 #   ./curio.sh status             show whether it's running and healthy
 #   ./curio.sh logs [-f]          show (or follow) the server log
 #   ./curio.sh analyze <url> ...  analyze a video with the CLI inside the image
+#   ./curio.sh queue [<url> ...]  queue a video for the overnight queue, or list the queue
 #   ./curio.sh shell              open a shell in the running container
 #
 # Settings (environment variables):
@@ -20,6 +21,10 @@
 #   CURIO_VOLUME        named volume holding the SQLite database    (default curio-data)
 #   CURIO_OLLAMA_URL    Ollama as seen from the container
 #                       (default http://host.containers.internal:11434)
+#   CURIO_GPU_CHECK     1 = let the container read GPU utilization (nvidia-smi through
+#                       CDI), so the overnight queue waits while the GPU is in use;
+#                       0 = don't (the queue then checks only Ollama). Default: 1 when
+#                       an NVIDIA CDI spec exists (nvidia-ctk cdi generate).
 # Values in ./.env (API keys, models, weights) are passed to the container.
 set -euo pipefail
 
@@ -103,10 +108,26 @@ check_container_ollama() {
   fi
 }
 
+# The container reads utilization only; Ollama on the host does the GPU work.
+gpu_args() {
+  local want="${CURIO_GPU_CHECK:-}"
+  if [[ -z "$want" ]]; then
+    want=0
+    [[ -f /etc/cdi/nvidia.yaml || -f /var/run/cdi/nvidia.yaml ]] && want=1
+  fi
+  [[ "$want" == 1 ]] && printf '%s\n' --device nvidia.com/gpu=all
+  return 0
+}
+
 container_args() {
-  local -a envs
+  local -a envs gpu
   mapfile -t envs < <(env_args)
-  printf '%s\n' --name "$NAME" -p "${BIND}:${PORT}:8000" -v "${VOLUME}:/app/data" "${NET_ARGS[@]}" "${envs[@]}"
+  mapfile -t gpu < <(gpu_args)
+  # The host's clock zone, so the queue hours are local time.
+  local -a tz=()
+  [[ -e /etc/localtime ]] && tz=(-v /etc/localtime:/etc/localtime:ro)
+  printf '%s\n' --name "$NAME" -p "${BIND}:${PORT}:8000" -v "${VOLUME}:/app/data" "${NET_ARGS[@]}" "${envs[@]}" \
+    "${gpu[@]}" "${tz[@]}"
 }
 
 start() {
@@ -189,9 +210,10 @@ case "${1:-}" in
   status) status ;;
   logs) shift; podman logs "$@" "$NAME" ;;
   analyze) shift; analyze "$@" ;;
+  queue) shift; running || die "Curio isn't running. Start it first: ./curio.sh start"; podman exec "$NAME" curio queue "$@" ;;
   shell) running || die "Curio isn't running."; podman exec -it "$NAME" bash ;;
   *)
-    sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,/^set -euo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'
     [[ -z "${1:-}" ]] || exit 1
     ;;
 esac

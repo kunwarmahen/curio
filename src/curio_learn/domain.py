@@ -222,6 +222,7 @@ class ValidationReport(BaseModel):
 
 
 class AnalysisStatus(StrEnum):
+    QUEUED = "queued"  # waiting for the overnight queue
     PENDING = "pending"
     RUNNING = "running"
     DONE = "done"

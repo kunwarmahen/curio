@@ -4,13 +4,14 @@ import { AskPanel } from '../components/Ask'
 import { NotesPanel } from '../components/Notes'
 import { Player, type Clip } from '../components/Player'
 import { WatchMap, WatchMapLegend, type Stretch } from '../components/WatchMap'
-import { IMPORTANCE_LABEL, PROFILES, clock, duration } from '../format'
+import { IMPORTANCE_LABEL, PROFILES, clock, duration, queueHours } from '../format'
 import { linkProps, navigate } from '../router'
 
 export function VideoPage({ id }: { id: string }) {
   const [analysis, setAnalysis] = useState<Analysis | null>(null)
   const [error, setError] = useState('')
   const [steps, setSteps] = useState<string[]>([])
+  const [reload, setReload] = useState(0)
 
   useEffect(() => {
     let timer: number | undefined
@@ -22,6 +23,8 @@ export function VideoPage({ id }: { id: string }) {
         setAnalysis(a)
         if (a.progress) setSteps((s) => (s[s.length - 1] === a.progress ? s : [...s, a.progress]))
         if (a.status === 'pending' || a.status === 'running') timer = window.setTimeout(poll, 1500)
+        // A queued video may start overnight; check now and then.
+        if (a.status === 'queued') timer = window.setTimeout(poll, 30000)
       } catch (err) {
         if (!stopped) setError(err instanceof ApiError ? err.message : 'Could not load this analysis.')
       }
@@ -31,7 +34,7 @@ export function VideoPage({ id }: { id: string }) {
       stopped = true
       window.clearTimeout(timer)
     }
-  }, [id])
+  }, [id, reload])
 
   if (error) {
     return (
@@ -45,6 +48,7 @@ export function VideoPage({ id }: { id: string }) {
   }
   if (!analysis) return <main className="page muted">Loading…</main>
   if (analysis.status === 'failed') return <Failed analysis={analysis} />
+  if (analysis.status === 'queued') return <Queued analysis={analysis} onStarted={() => setReload((n) => n + 1)} />
   if (analysis.status !== 'done' || !analysis.playlist) return <Progress analysis={analysis} steps={steps} />
   return <Results analysis={analysis} />
 }
@@ -77,6 +81,55 @@ function Progress({ analysis, steps }: { analysis: Analysis; steps: string[] }) 
         With a local model this takes a few minutes. You can leave this page; the result will be under
         Recently analyzed.
       </p>
+    </main>
+  )
+}
+
+function Queued({ analysis, onStarted }: { analysis: Analysis; onStarted: () => void }) {
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  const [hours, setHours] = useState('')
+  useEffect(() => {
+    api.queue().then((q) => setHours(queueHours(q.window_start, q.window_end)), () => {})
+  }, [])
+  const act = async (action: 'start' | 'remove') => {
+    setBusy(true)
+    setErr('')
+    try {
+      if (action === 'start') {
+        await api.queueStart(analysis.id)
+        onStarted()
+      } else {
+        await api.queueRemove(analysis.id)
+        navigate('/')
+      }
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : 'That didn’t work. Try again.')
+    }
+    setBusy(false)
+  }
+  return (
+    <main className="page">
+      <BackLink />
+      <h1>{analysis.video.title}</h1>
+      <p className="muted">{analysis.video.channel}</p>
+      <p className="queued__lede">
+        Waiting in the queue. Curio analyzes queued videos one at a time{hours ? ` ${hours}` : ''}, when the GPU
+        is free. This page updates when it's done.
+      </p>
+      {err && (
+        <p className="form-error" role="alert">
+          {err}
+        </p>
+      )}
+      <div className="queued__actions">
+        <button type="button" className="button-primary" onClick={() => act('start')} disabled={busy}>
+          Analyze now
+        </button>
+        <button type="button" className="button-quiet" onClick={() => act('remove')} disabled={busy}>
+          Remove from the queue
+        </button>
+      </div>
     </main>
   )
 }

@@ -11,6 +11,7 @@
 | Phase 2: Intelligent learning | ✅ learning profiles, custom objective, redundancy detection, skip recommendations, sentence-level boundaries, mid-roll ad removal and learning notes |
 | LAN access | ✅ app and Podman container listen on all interfaces by default |
 | Phase 3: Interactive learning | 🟡 Ask the Video (grounded answers, timestamps, hybrid search) and segment completion tracking; quizzes, flashcards and saved playlists are not built |
+| Overnight queue | ✅ queue videos any time; analyzed 1–7 AM while the GPU is idle |
 | Phase 4: Multi-video intelligence | ⏳ not started |
 
 ## Phase 1 log (2026-11-23)
@@ -32,7 +33,7 @@
 - `storage`: SQLAlchemy/SQLite (videos, transcripts, analyses, segments),
   cache keyed by video + preferences + model + pipeline version.
 - `service`, FastAPI (`/api/v1`), CLI. (A Streamlit UI was built first and then replaced; see the UI log below.)
-- 98 offline tests at the end of Phase 1 (105 with notes, 115 with Ask the Video) (ad detection and carving, sentence units and boundary refinement, URL parsing, normalization, segmentation repair, scoring and
+- 98 offline tests at the end of Phase 1 (105 with notes, 115 with Ask the Video, 121 with the overnight queue) (ad detection and carving, sentence units and boundary refinement, URL parsing, normalization, segmentation repair, scoring and
   calibration, playlist and prerequisites, validation, LLM retry, request shapes and
   truncation guard, service caching, stale runs, API).
 
@@ -309,15 +310,33 @@ Verified with Ollama on the CS329Z lecture, full-transcript mode:
 - The test questions are saved in the lecture's conversation in `data/curio.db`;
   "Clear the conversation" removes them.
 
+### Overnight queue (2026-11-23)
+
+Requested: add videos at any time and have Curio analyze them at night when nobody
+is using the GPU, as a queue. Built `overnight.py` (hours window, GPU probe, queue
+worker), a `queued` status, three API routes, `curio queue`, `./curio.sh queue`,
+"Queue for later" on the home page with the queue listed above Recently analyzed,
+and a queued state on the video page ("Analyze now", "Remove from the queue"). Design
+in ARCHITECTURE.md §11. 6 new tests (121 in total).
+
+Checked against the real machine, with a scratch database on port 8471:
+- Two videos queued at 20:47 with the default `1-7` window: the queue reported
+  "waiting_window", next start 01:00, and the page said so (desktop and 390 px).
+- With the window open all day: the worker waited with "The GPU is in use (89%
+  busy)", correctly: a training job (`aksharallm` autoencoder) had started on the
+  GPU. I didn't start an analysis on top of it; starting and moving on to the next
+  video are covered by the tests.
+- Idle readings on this desktop are 0–5% with brief spikes to 30% (remote desktop,
+  browser), so the check uses the median of five readings and a 20% threshold.
+- Inside the container: `--device nvidia.com/gpu=all` (CDI) makes `nvidia-smi` work
+  for the non-root user, and mounting `/etc/localtime` gives local time.
+
 ### Known gaps / next steps
 - The Anthropic provider is covered by unit tests with a mocked client only.
   No API key was available, so it has not been run against the live API yet.
 - Calibrate the scoring thresholds and the redundancy threshold on more videos
   (lectures, podcasts, tutorials with auto-captions).
-- **Overnight queue** (requested): add videos at any time and have Curio process
-  the queue at night, when nobody is using the GPU. Planned shape: a `queued`
-  status and a queue table, a schedule window (for example `CURIO_QUEUE_HOURS=1-7`)
-  plus an idle check (GPU utilization and Ollama's running models below a
-  threshold), a "Queue for tonight" button beside Analyze, and the queue shown on
-  the home page. Analyses would run one at a time, as now.
+- Overnight queue, possible next steps: also write notes for queued videos, and
+  pause between videos when someone starts using the GPU mid-run (today a running
+  analysis finishes).
 - Phase 3, still to build: quizzes and flashcards, saved custom playlists.

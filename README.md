@@ -19,7 +19,9 @@ complete: learning profiles, custom objectives, redundancy detection, skip
 recommendations and **learning notes** (key points, explanations, definitions,
 takeaways and recommendations, each linked to the moment it's said). From Phase 3,
 **Ask the Video** is in: questions answered from the transcript with clickable
-timestamps, keeping anything that isn't from the video apart. See
+timestamps, keeping anything that isn't from the video apart. An **overnight
+queue** lets you add videos at any time and have them analyzed at night, when the
+GPU is free. See
 [docs/PROGRESS.md](docs/PROGRESS.md) for details and
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design.
 
@@ -50,6 +52,8 @@ uv run curio analyze "https://www.youtube.com/watch?v=e_m99aR7_3Q" \
     --profile technical --objective "how GEPA optimizes prompts" --minutes 20
 uv run curio notes <analysis id> --scope playlist --out notes.md   # learning notes
 uv run curio ask <analysis id> "Where does the speaker explain GRPO?"
+uv run curio queue "<youtube url>" --profile technical   # analyze tonight (curio api runs the queue)
+uv run curio queue                                       # list the queue; --remove <id> takes one out
 ```
 
 `curio api` listens on all interfaces, so phones and other computers on your
@@ -81,6 +85,16 @@ doesn't cover say so. The conversation is saved, and follow-ups know what was
 asked before. With the local model, the first question about a video takes about
 40 s (the model reads the whole transcript) and follow-ups 5–10 s.
 
+**Queue for later** (beside "Find the best parts") adds a video to the overnight
+queue instead of analyzing it now. The server analyzes queued videos one at a time,
+oldest first, between 1 AM and 7 AM local time (`CURIO_QUEUE_HOURS`), and only while
+the GPU is idle: under 20% utilization (the median of five nvidia-smi readings, so a
+desktop's brief spikes don't count) and no Ollama model loaded by another program.
+Before each video it checks again, so if you start using the GPU at night the queue
+waits; a video already running finishes. The home page lists the queue with what
+it's waiting for, and each queued video can be started now or removed. Queuing a
+video that is already analyzed opens the existing result.
+
 `curio analyze` prints the playlist and, with `--json out.json`, writes the full
 analysis. Results are cached in `data/curio.db`. Pass `--force` to re-analyze.
 
@@ -99,6 +113,7 @@ the image.
 ./curio.sh restart
 ./curio.sh run                # run in the foreground; Ctrl+C stops it
 ./curio.sh analyze "<youtube url>" --profile technical   # one-off CLI analysis
+./curio.sh queue "<youtube url>"   # add to the overnight queue of the running container
 ./curio.sh shell              # shell inside the running container
 ```
 
@@ -108,6 +123,7 @@ the image.
 | `CURIO_BIND` | `0.0.0.0` | host address the port is published on: all interfaces, so the LAN can reach it; `127.0.0.1` keeps it to this machine |
 | `CURIO_VOLUME` | `curio-data` | named volume holding the SQLite database |
 | `CURIO_OLLAMA_URL` | `http://host.containers.internal:11434` | Ollama as seen from the container |
+| `CURIO_GPU_CHECK` | `1` if an NVIDIA CDI spec exists | gives the container read access to the GPU (`--device nvidia.com/gpu=all`) so the overnight queue can see utilization; `0` = it checks only Ollama |
 | `CURIO_IMAGE` / `CURIO_CONTAINER` | `localhost/curio:latest` / `curio` | image and container names |
 
 Notes:
@@ -123,6 +139,10 @@ Notes:
   (`--map-guest-addr`) and points `host.containers.internal` at it.
 - The container runs as a non-root user. The image has a health check, built in
   Docker format because the OCI format drops it.
+- The container gets the host's `/etc/localtime`, so queue hours are local time.
+  The GPU device is used only to read utilization with `nvidia-smi`; Ollama on the
+  host still does the work. Without a CDI spec (`sudo nvidia-ctk cdi generate
+  --output=/etc/cdi/nvidia.yaml`), the queue checks only Ollama's loaded models.
 - The container database (volume) is separate from `data/curio.db` used by local
   `uv run` commands.
 
@@ -149,6 +169,9 @@ most important ones:
 | `CURIO_LLM_MODEL` | provider default | model for all tasks; `CURIO_LLM_MODEL_OUTLINE` / `_EVALUATE` / `_NOTES` / `_ASK` override per task |
 | `CURIO_ASK_CONTEXT_TOKENS` | `0` (auto) | transcript tokens Ask may show the model; longer transcripts are searched |
 | `CURIO_EMBED_MODEL` | `nomic-embed-text` | Ollama embedding model for searching long transcripts; empty = keyword search only |
+| `CURIO_QUEUE_HOURS` | `1-7` | local hours when queued videos are analyzed (`22:30-6` crosses midnight); empty = any time the GPU is idle |
+| `CURIO_QUEUE_GPU_BUSY_PERCENT` | `20` | GPU utilization at which the queue waits |
+| `CURIO_QUEUE_CHECK_S` | `60` | how often the server checks the queue; `0` turns the queue worker off |
 | `CURIO_OLLAMA_DEFAULT_MODEL` | `qwen3.8-64k` | local model |
 | `CURIO_OLLAMA_NUM_CTX` | `32768` | context size for every Ollama call (fixed, so the model loads once) |
 | `CURIO_ANTHROPIC_DEFAULT_MODEL` | `claude-opus-5-5` | cloud model |
@@ -215,6 +238,9 @@ uv run ruff check src tests
 - Section starts are exact to a caption cue, not a word: captions carry no word
   timings, so when a topic changes mid-cue (common in auto-captions) the start is a
   few words early.
+- The overnight queue runs inside the API server (`curio api` or the container),
+  so the server must be running at night. GPU utilization is read from NVIDIA GPUs
+  only; on other hardware the queue relies on the hours and Ollama's loaded models.
 - Picks vary somewhat between runs of the same video (the model's outline and
   ratings aren't deterministic).
 - The coverage estimate is an AI judgment, not an objective measurement.

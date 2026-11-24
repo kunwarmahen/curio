@@ -54,6 +54,7 @@ curio/
 │   ├── logging_setup.py
 │   ├── domain.py             Pydantic domain models (single source of truth)
 │   ├── service.py            CurioService façade used by every frontend
+│   ├── overnight.py          overnight queue: hours window, GPU idle check, worker
 │   ├── ingestion/
 │   │   ├── url.py            YouTube URL → 11-char video id
 │   │   ├── metadata.py       MetadataProvider protocol + yt-dlp impl (no download)
@@ -150,8 +151,11 @@ invent a timestamp: code converts the numbers to the original cue times.
 | Method | Path | Body / result |
 |---|---|---|
 | `GET`  | `/health` | `{status, llm_provider, model}` |
-| `POST` | `/analyses` | `{url, preferences}` → `202 {analysis_id, status}`; runs in background. Returns the cached analysis if one exists for the same video + preferences + model. |
-| `GET`  | `/analyses/{id}` | `VideoAnalysis` (with `status`: `pending`/`running`/`done`/`failed`, `progress` message, `error`) |
+| `POST` | `/analyses` | `{url, preferences, force?, queue?}` → `202 {analysis_id, status}`; runs in background, or with `queue` waits in the overnight queue (`status: queued`). Returns the cached, queued or running analysis if one exists for the same video + preferences + model; without `queue`, a matching queued one is started now. |
+| `GET`  | `/analyses/{id}` | `VideoAnalysis` (with `status`: `queued`/`pending`/`running`/`done`/`failed`, `progress` message, `error`) |
+| `GET`  | `/queue` | `QueueStatus`: `window_start`/`window_end` (local `HH:MM`), `state` (`empty`, `busy`, `waiting_window`, `waiting_gpu`, `starting`), `message`, `next_start`, `items[]` (running first, then queued oldest first) |
+| `POST` | `/queue/{id}/start` | start a queued analysis now → `202` (`400` if it isn't queued any more) |
+| `DELETE` | `/queue/{id}` | remove a queued analysis |
 | `GET`  | `/videos/recent?limit=10` | `[ {video, analysis_id, profile, analyzed_at, playlist_s, watch_map[]} ]` |
 | `GET`  | `/videos/{video_id}/transcript` | `Transcript` (normalized blocks) |
 | `GET`  | `/analyses/{id}/completed` | ids of segments marked watched |
@@ -254,7 +258,7 @@ def generate_structured(provider, model_cls, *, system, user, task, retries=2) -
 - `Containerfile`: a Node 22 stage builds `web/dist`; the runtime stage is Python
   3.12-slim with uv 0.11.7, `uv sync --frozen --no-dev`, a non-root user, and a
   health check on `/api/v1/health`.
-- `curio.sh`: build, start, stop, restart, run, status, logs, analyze, shell.
+- `curio.sh`: build, start, stop, restart, run, status, logs, analyze, queue, shell.
   It publishes on all interfaces (`CURIO_BIND=0.0.0.0`, so the LAN can use it; there
   is no login), prints the local and LAN addresses, keeps the SQLite database in a named volume,
   checks that the port is free and that the container can reach Ollama.
@@ -312,7 +316,40 @@ block sharing the most words with the part, so a timestamp points at the claim, 
 just its 20–45 s block. The last four turns are included as conversation history.
 Answers are stored in `questions`.
 
-## 11. Phase 1 MVP milestone
+## 11. Overnight queue (`overnight.py`)
+
+A queued analysis is an ordinary `analyses` row with status `queued`, created by
+`submit(..., queue=True)` after metadata and transcript are fetched (so a bad link
+fails at once, not at 3 AM). Matching uses the same cache key as analyses, so
+queuing a video twice reuses the row, and analyzing a queued video now takes it
+out of the queue (`claim_queued`, a conditional `UPDATE ... WHERE status='queued'`,
+so the worker and a "start now" request can't both start it). Queued rows are
+never marked stale.
+
+The API server owns a `QueueWorker` thread that ticks every `CURIO_QUEUE_CHECK_S`
+(60 s). A tick starts the oldest queued analysis on the API's single job executor
+when all of these hold:
+
+1. **Curio is idle**: no analysis or notes job in flight (`Jobs` counts them).
+2. **Hours**: local time is inside `CURIO_QUEUE_HOURS` (default `1-7`; may cross
+   midnight; empty = any time).
+3. **GPU idle** (Ollama only; with Claude this check is skipped):
+   - Ollama `/api/ps` lists no model except Curio's own (its LLM and embedding
+     models), and Curio's own models count only within 15 minutes of Curio's last
+     LLM use (their `keep_alive` is 10 minutes). Otherwise a loaded model means
+     someone else is using Ollama.
+   - `nvidia-smi` utilization, the median of five one-second readings, is below
+     `CURIO_QUEUE_GPU_BUSY_PERCENT` (20). Measured on the dev machine: an idle
+     GNOME desktop reads 0–5% with spikes to about 30%; a training job reads 88–90%.
+     Without `nvidia-smi` this check is skipped.
+
+The conditions are checked before each start, so a run started at 6:55 finishes
+after 7:00, and a GPU job started at night pauses the queue before the next video.
+The worker remembers the last reason it waited, which `GET /queue` reports. In
+Podman, `curio.sh` mounts the host's `/etc/localtime` and, when an NVIDIA CDI spec
+exists, adds `--device nvidia.com/gpu=all` so `nvidia-smi` works in the container.
+
+## 12. Phase 1 MVP milestone
 
 **Done when:** pasting the test lecture (`e_m99aR7_3Q`, 80 min) produces a
 validated playlist of about 15–30 minutes in which every segment has an accurate

@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from pydantic import BaseModel
-from sqlalchemy import create_engine, delete, select
+from sqlalchemy import create_engine, delete, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from curio_learn.domain import (
@@ -126,7 +126,14 @@ class Repository:
 
     # ---------------------------------------------------------------- analyses
 
-    def create_analysis(self, analysis_id: str, video_id: str, prefs: LearningPreferences, llm_key: str) -> None:
+    def create_analysis(
+        self,
+        analysis_id: str,
+        video_id: str,
+        prefs: LearningPreferences,
+        llm_key: str,
+        status: AnalysisStatus = AnalysisStatus.PENDING,
+    ) -> None:
         with self.session() as db, db.begin():
             db.add(
                 AnalysisRow(
@@ -135,7 +142,7 @@ class Repository:
                     preferences_key=prefs.cache_key(),
                     preferences_json=prefs.model_dump(mode="json"),
                     llm_key=llm_key,
-                    status=AnalysisStatus.PENDING.value,
+                    status=status.value,
                 )
             )
 
@@ -206,9 +213,11 @@ class Repository:
     def find_in_progress(
         self, video_id: str, prefs: LearningPreferences, llm_key: str, *, stale_after: timedelta = timedelta(minutes=20)
     ) -> str | None:
-        """Id of a live analysis with identical inputs. Rows whose progress hasn't been
-        updated within `stale_after` belong to a dead process and are ignored."""
+        """Id of a queued or live analysis with identical inputs. Running rows whose
+        progress hasn't been updated within `stale_after` belong to a dead process and
+        are ignored; queued rows wait without updates."""
         cutoff = datetime.now(UTC) - stale_after
+        waiting = [AnalysisStatus.QUEUED.value, AnalysisStatus.PENDING.value, AnalysisStatus.RUNNING.value]
         with self.session() as db:
             stmt = (
                 select(AnalysisRow)
@@ -216,14 +225,74 @@ class Repository:
                     AnalysisRow.video_id == video_id,
                     AnalysisRow.preferences_key == prefs.cache_key(),
                     AnalysisRow.llm_key == llm_key,
-                    AnalysisRow.status.in_([AnalysisStatus.PENDING.value, AnalysisStatus.RUNNING.value]),
+                    AnalysisRow.status.in_(waiting),
                 )
                 .order_by(AnalysisRow.updated_at.desc())
             )
             for row in db.scalars(stmt):
-                if _aware(row.updated_at) >= cutoff:
+                if row.status == AnalysisStatus.QUEUED.value or _aware(row.updated_at) >= cutoff:
                     return row.id
             return None
+
+    # ------------------------------------------------------------------- queue
+
+    def queued_ids(self) -> list[str]:
+        """Queued analyses, oldest first."""
+        with self.session() as db:
+            stmt = (
+                select(AnalysisRow.id)
+                .where(AnalysisRow.status == AnalysisStatus.QUEUED.value)
+                .order_by(AnalysisRow.created_at)
+            )
+            return list(db.scalars(stmt))
+
+    def queue_items(self, *, stale_after: timedelta = STALE_AFTER) -> list[dict]:
+        """Analyses in progress (most recently active first), then the queue in order."""
+        cutoff = datetime.now(UTC) - stale_after
+        live = [AnalysisStatus.PENDING.value, AnalysisStatus.RUNNING.value]
+        with self.session() as db:
+            stmt = (
+                select(AnalysisRow, VideoRow)
+                .join(VideoRow, VideoRow.video_id == AnalysisRow.video_id)
+                .where(AnalysisRow.status.in_([AnalysisStatus.QUEUED.value, *live]))
+            )
+            rows = [
+                (a, v)
+                for a, v in db.execute(stmt)
+                if a.status == AnalysisStatus.QUEUED.value or _aware(a.updated_at) >= cutoff
+            ]
+        rows.sort(key=lambda r: (r[0].status == AnalysisStatus.QUEUED.value, _aware(r[0].created_at)))
+        return [
+            {
+                "analysis_id": a.id,
+                "video": VideoMetadata.model_validate(v.metadata_json),
+                "preferences": LearningPreferences.model_validate(a.preferences_json),
+                "status": AnalysisStatus(a.status),
+                "progress": a.progress,
+                "added_at": _aware(a.created_at),
+            }
+            for a, v in rows
+        ]
+
+    def claim_queued(self, analysis_id: str, progress: str = "Starting") -> bool:
+        """Move a queued analysis to pending. False if it isn't queued (any more), so
+        the queue worker and a "start now" request can't both start it."""
+        with self.session() as db, db.begin():
+            result = db.execute(
+                update(AnalysisRow)
+                .where(AnalysisRow.id == analysis_id, AnalysisRow.status == AnalysisStatus.QUEUED.value)
+                .values(status=AnalysisStatus.PENDING.value, progress=progress, updated_at=datetime.now(UTC))
+            )
+            return result.rowcount == 1
+
+    def remove_queued(self, analysis_id: str) -> bool:
+        """Delete an analysis that is still waiting in the queue."""
+        with self.session() as db, db.begin():
+            row = db.get(AnalysisRow, analysis_id)
+            if row is None or row.status != AnalysisStatus.QUEUED.value:
+                return False
+            db.delete(row)
+            return True
 
     def mark_stale_running_failed(self, *, stale_after: timedelta = STALE_AFTER) -> int:
         """Mark analyses abandoned by a dead process as failed.

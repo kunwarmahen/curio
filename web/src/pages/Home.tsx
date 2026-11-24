@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react'
-import { ApiError, api, type Profile, type RecentVideo } from '../api'
+import { useCallback, useEffect, useState } from 'react'
+import { ApiError, api, type Profile, type QueueStatus, type RecentVideo } from '../api'
+import { QueueList } from '../components/Queue'
 import { WatchMap } from '../components/WatchMap'
-import { PROFILES, duration } from '../format'
+import { PROFILES, duration, queueHours } from '../format'
 import { linkProps, navigate } from '../router'
 
 const WATCH_TIMES = [10, 15, 20, 30, 45]
@@ -12,33 +13,63 @@ export function Home() {
   const [goal, setGoal] = useState('')
   const [minutes, setMinutes] = useState<number | null>(null)
   const [force, setForce] = useState(false)
-  const [busy, setBusy] = useState(false)
+  const [busy, setBusy] = useState<'' | 'now' | 'queue'>('')
   const [error, setError] = useState('')
+  const [queued, setQueued] = useState('')
   const [recent, setRecent] = useState<RecentVideo[] | null>(null)
+  const [queue, setQueue] = useState<QueueStatus | null>(null)
+
+  const loadQueue = useCallback(() => {
+    api.queue().then(setQueue, () => {})
+  }, [])
 
   useEffect(() => {
     api.recent().then(setRecent, () => setRecent([]))
-  }, [])
+    loadQueue()
+  }, [loadQueue])
 
-  async function submit(e: React.FormEvent) {
-    e.preventDefault()
+  // While something waits or runs, keep its state current (it changes overnight).
+  const hasItems = !!queue?.items.length
+  useEffect(() => {
+    if (!hasItems) return
+    const timer = window.setInterval(() => {
+      loadQueue()
+      api.recent().then(setRecent, () => {})
+    }, 15000)
+    return () => window.clearInterval(timer)
+  }, [hasItems, loadQueue])
+
+  async function start(mode: 'now' | 'queue') {
     if (!url.trim()) {
       setError('Paste a YouTube link first.')
       return
     }
-    setBusy(true)
+    setBusy(mode)
     setError('')
+    setQueued('')
     try {
-      const { analysis_id } = await api.analyze(
+      const { analysis_id, status } = await api.analyze(
         url.trim(),
         { profile, custom_objective: goal.trim(), target_minutes: minutes },
         force,
+        mode === 'queue',
       )
-      navigate(`/v/${analysis_id}`)
+      if (status !== 'queued') {
+        navigate(`/v/${analysis_id}`)
+        return
+      }
+      setUrl('')
+      setQueued('Added to the queue.')
+      loadQueue()
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Something went wrong starting the analysis.')
-      setBusy(false)
     }
+    setBusy('')
+  }
+
+  function submit(e: React.FormEvent) {
+    e.preventDefault()
+    start('now')
   }
 
   return (
@@ -68,8 +99,8 @@ export function Home() {
             aria-invalid={!!error}
             aria-describedby={error ? 'url-error' : undefined}
           />
-          <button type="submit" className="button-primary" disabled={busy}>
-            {busy ? 'Fetching transcript…' : 'Find the best parts'}
+          <button type="submit" className="button-primary" disabled={!!busy}>
+            {busy === 'now' ? 'Fetching transcript…' : 'Find the best parts'}
           </button>
         </div>
         {error && (
@@ -77,6 +108,16 @@ export function Home() {
             {error}
           </p>
         )}
+        <div className="analyze__later">
+          <button type="button" className="button-quiet" onClick={() => start('queue')} disabled={!!busy}>
+            {busy === 'queue' ? 'Adding…' : 'Queue for later'}
+          </button>
+          <span className="hint" aria-live="polite">
+            {queued ||
+              (queue &&
+                `Queued videos are analyzed ${queueHours(queue.window_start, queue.window_end)}, when the GPU is free.`)}
+          </span>
+        </div>
 
         <fieldset className="goal">
           <legend className="field-label">What are you watching for?</legend>
@@ -130,6 +171,8 @@ export function Home() {
           </label>
         </details>
       </form>
+
+      {queue && <QueueList queue={queue} onChange={loadQueue} />}
 
       <section className="recent" aria-labelledby="recent-heading">
         <h2 id="recent-heading">Recently analyzed</h2>

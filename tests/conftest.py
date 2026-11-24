@@ -205,4 +205,5 @@ def settings(tmp_path) -> Settings:
         budget_min_minutes=2,
         budget_max_minutes=35,
         embed_model="",
+        queue_check_s=0,
     )

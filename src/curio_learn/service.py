@@ -99,11 +99,15 @@ class CurioService:
         prefs: LearningPreferences,
         *,
         force: bool = False,
+        queue: bool = False,
     ) -> tuple[str, bool]:
         """Register an analysis. Returns (analysis_id, needs_run).
 
         Fetches metadata and transcript up front so invalid videos fail fast.
-        Reuses a finished or in-progress analysis with identical inputs unless `force`.
+        Reuses a finished, queued or in-progress analysis with identical inputs unless
+        `force`. With `queue` the analysis waits for the overnight queue (needs_run is
+        False); without it, a matching queued analysis is taken out of the queue to
+        run now.
         """
         video_id = extract_video_id(url)
         meta, _ = self.ingest(video_id)
@@ -112,10 +116,25 @@ class CurioService:
             existing = self.repo.find_cached(video_id, prefs, key) or self.repo.find_in_progress(video_id, prefs, key)
             if existing:
                 log.info("Reusing analysis %s for %s", existing, video_id)
+                current = self.repo.get_analysis(existing)
+                if not queue and current is not None and current.status == AnalysisStatus.QUEUED:
+                    return self.start_queued(existing), True
                 return existing, False
         analysis_id = uuid.uuid4().hex[:12]
-        self.repo.create_analysis(analysis_id, meta.video_id, prefs, key)
-        return analysis_id, True
+        status = AnalysisStatus.QUEUED if queue else AnalysisStatus.PENDING
+        self.repo.create_analysis(analysis_id, meta.video_id, prefs, key, status)
+        return analysis_id, not queue
+
+    def start_queued(self, analysis_id: str) -> str:
+        """Take a queued analysis out of the queue so it can run now."""
+        if self.repo.get_analysis(analysis_id) is None:
+            raise KeyError(analysis_id)
+        if not self.repo.claim_queued(analysis_id):
+            raise AnalysisError("This video isn't waiting in the queue any more.")
+        return analysis_id
+
+    def remove_queued(self, analysis_id: str) -> bool:
+        return self.repo.remove_queued(analysis_id)
 
     def run(self, analysis_id: str, progress: Progress = lambda _: None) -> VideoAnalysis:
         pending = self.repo.get_analysis(analysis_id)

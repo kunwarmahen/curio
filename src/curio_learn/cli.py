@@ -56,6 +56,13 @@ def main(argv: list[str] | None = None) -> int:
     ak.add_argument("analysis_id")
     ak.add_argument("question")
 
+    qu = sub.add_parser("queue", help="Queue a video for the overnight queue, or list the queue")
+    qu.add_argument("url", nargs="?", help="Video to queue; without it, list the queue")
+    qu.add_argument("--profile", choices=[p.value for p in LearningProfile], default="general")
+    qu.add_argument("--objective", default="")
+    qu.add_argument("--minutes", type=float, default=None)
+    qu.add_argument("--remove", metavar="ANALYSIS_ID", help="Take a video out of the queue")
+
     api = sub.add_parser("api", help="Run the API server (also serves the built web UI)")
     # All interfaces, so phones and laptops on the LAN can use it. --host 127.0.0.1 keeps it local.
     api.add_argument("--host", default="0.0.0.0")
@@ -132,6 +139,41 @@ def main(argv: list[str] | None = None) -> int:
         for w in a.warnings:
             print(f"\nNote: {w}")
         print(f"\n{a.llm.provider if a.llm else ''} · {a.context} transcript · {a.elapsed_s}s")
+        return 0
+    if args.cmd == "queue":
+        from curio_learn.domain import AnalysisStatus
+        from curio_learn.service import CurioService
+
+        service = CurioService(settings)
+        if args.remove:
+            if not service.remove_queued(args.remove):
+                print(f"Error: no queued video with id {args.remove}", file=sys.stderr)
+                return 1
+            print(f"Removed {args.remove} from the queue.")
+            return 0
+        if args.url:
+            prefs = LearningPreferences(
+                profile=LearningProfile(args.profile), custom_objective=args.objective, target_minutes=args.minutes
+            )
+            try:
+                analysis_id, _ = service.submit(args.url, prefs, queue=True)
+            except CurioError as exc:
+                print(f"Error ({exc.code}): {exc.message}", file=sys.stderr)
+                return 1
+            current = service.get(analysis_id)
+            if current and current.status == AnalysisStatus.QUEUED:
+                hours = settings.queue_hours or "any time"
+                print(f"Queued {analysis_id}: {current.video.title}")
+                print(f"The API server (curio api) analyzes it during the queue hours ({hours}) when the GPU is idle.")
+            elif current:
+                print(f"Already {current.status.value}: {analysis_id} ({current.video.title})")
+            return 0
+        items = service.repo.queue_items()
+        if not items:
+            print("The queue is empty.")
+        for it in items:
+            v = it["video"]
+            print(f"{it['analysis_id']}  {it['status'].value:<8} {fmt_ts(v.duration_s):>8}  {v.title}")
         return 0
     if args.cmd == "api":
         import uvicorn
