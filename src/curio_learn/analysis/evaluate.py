@@ -145,8 +145,7 @@ def evaluate_sections(
             continue  # evaluated before a pause
         progress(f"Evaluating sections {batch[0].id}–{batch[-1].id} (batch {n} of {len(batches)})")
         run(batch, f"evaluate[{n}]")
-        if n < len(batches):
-            on_batch(dict(results))
+        on_batch(dict(results))
 
     missing = [s for s in sections if s.id not in results]
     if missing:

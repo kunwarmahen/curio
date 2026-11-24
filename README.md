@@ -4,363 +4,287 @@
 
 **Watch the parts of long videos that teach you the most.**
 
-Curio reads the full transcript of a long YouTube video (a lecture, podcast or
-tutorial), maps its topics, and judges every section against the whole video and
-your learning objective. It then builds a curated playlist: which segments to
-watch, what each one teaches, why it's worth your time, and what you can skip.
-Clicking a segment plays the original video from that moment.
+Paste a YouTube lecture, podcast or tutorial, and Curio reads its full transcript,
+works out what each part teaches, and gives you a playlist of the parts worth your
+time for *your* goal: what each one teaches, why it's worth watching, and what you
+can safely skip. Click a part and the original video plays from that moment.
 
-Curio is not a summarizer. Its goal is to maximize knowledge acquired per minute watched.
+Curio also writes study notes, answers questions about the video with timestamps,
+quizzes you, and keeps flashcards for review. Give it a whole YouTube playlist and it
+does the same across every lecture of a course, leaving out what one lecture repeats
+from another.
 
-## Status
+It runs on your own computer, with a local model through Ollama (your GPU) or with
+Claude (an Anthropic API key). It never downloads video or audio.
 
-Phase 1 (functional MVP) is implemented: URL → metadata and transcript →
-topic segmentation → contextual evaluation → explainable scoring → time-budgeted
-playlist → validation → web app (React) with a watch map and an embedded player. Phase 2 is
-complete: learning profiles, custom objectives, redundancy detection, skip
-recommendations and **learning notes** (key points, explanations, definitions,
-takeaways and recommendations, each linked to the moment it's said). From Phase 3,
-**Ask the Video** is in: questions answered from the transcript with clickable
-timestamps, keeping anything that isn't from the video apart. An **overnight
-queue** lets you add videos at any time and have them analyzed at night, when the
-GPU is free. **Quizzes and flashcards** (with spaced repetition) test what a video
-teaches. From Phase 4, **courses**: paste a YouTube playlist and Curio queues its
-lectures and builds one playlist from the best parts of all of them, leaving out
-what one lecture teaches again from another, with a checklist of what's easy to miss
-for your goal. **Ask the course** answers questions from every lecture at once,
-citing the moment in each lecture, and a course quiz and flashcards cover the whole
-course playlist. See
-[docs/PROGRESS.md](docs/PROGRESS.md) for details and
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design.
+- [Getting started](#getting-started)
+- [Analyze a video](#analyze-a-video)
+- [The video page](#the-video-page)
+- [Flashcard review](#flashcard-review)
+- [The overnight queue](#the-overnight-queue)
+- [Courses](#courses)
+- [Using it from your phone or another computer](#using-it-from-your-phone-or-another-computer)
+- [Command line](#command-line)
+- [Settings](#settings)
+- [Good to know](#good-to-know)
 
-## Requirements
+## Getting started
 
-- Python 3.12+ and [uv](https://docs.astral.sh/uv/)
-- Node.js 20+ (to build the web app in `web/`), **or** Podman 4.4+ to run everything
-  in a container (see "Run in Podman")
-- **One** LLM backend:
-  - [Ollama](https://ollama.com) with a long-context model (default
-    `qwen3.8-64k`; a 90-minute transcript is about 20k tokens), **or**
-  - an Anthropic API key (`claude-opus-5-5` by default).
-- Network access to YouTube. Curio never downloads video or audio.
+### What you need
 
-## Install
+- **A model**, one of:
+  - [Ollama](https://ollama.com) with a long-context model (default `qwen3.8-64k`;
+    a 90-minute transcript is about 20k tokens), and ideally `nomic-embed-text`
+    for searching long videos and courses.
+    About 2.5–4 minutes per hour-long video on a 24 GB GPU.
+  - An Anthropic API key (`claude-opus-5-5` by default). Faster; costs API credit.
+- **Either** Podman 4.4+ (easiest: everything runs in one container) **or**
+  Python 3.12+ with [uv](https://docs.astral.sh/uv/) and Node.js 20+.
+- Internet access to YouTube. Videos need captions (manual or auto-generated).
+
+### Start it with Podman (recommended)
 
 ```bash
-uv sync                 # creates .venv and installs dependencies
-cp .env.example .env    # optional: adjust settings / add ANTHROPIC_API_KEY
+cp .env.example .env    # optional: add ANTHROPIC_API_KEY, change models or settings
+./curio.sh start        # builds the image the first time, then prints the addresses
 ```
 
-## Run
+Open **http://127.0.0.1:8470**. Ollama keeps running on your machine; the container
+talks to it. It must listen on all interfaces (`OLLAMA_HOST=0.0.0.0` for the Ollama
+service); `start` warns if the container can't reach it.
+
+Day to day:
 
 ```bash
-(cd web && npm install && npm run build)   # once, and after frontend changes
-uv run curio api        # app → http://127.0.0.1:8470 and http://<this machine's LAN IP>:8470
-uv run curio analyze "https://www.youtube.com/watch?v=e_m99aR7_3Q" \
-    --profile technical --objective "how GEPA optimizes prompts" --minutes 20
-uv run curio notes <analysis id> --scope playlist --out notes.md   # learning notes
-uv run curio ask <analysis id> "Where does the speaker explain GRPO?"
-uv run curio quiz <analysis id> --scope video     # write and print a quiz and flashcards
-uv run curio queue "<youtube url>" --profile technical   # analyze tonight (curio api runs the queue)
-uv run curio queue                                       # list the queue; --remove <id> takes one out
-uv run curio course "<youtube playlist url>"             # add a course: queue its lectures for tonight
-uv run curio course <course id> --build --minutes 120    # build and print the course playlist
-uv run curio check-claude    # one tiny request to check a Claude API key (< $0.01)
+./curio.sh status       # is it running and healthy?
+./curio.sh logs -f      # follow the log
+./curio.sh stop         # stop it; your analyses are kept
+./curio.sh build && ./curio.sh restart   # after updating Curio (wait until the queue is idle)
 ```
 
-`curio api` listens on all interfaces, so phones and other computers on your
-network can open it at `http://<LAN IP>:8470`. Use `--host 127.0.0.1` to keep it
-on this machine. See "Access from your network" below.
+Your data lives in the Podman volume `curio-data`, so it survives restarts and
+updates.
 
-For frontend development, run `uv run curio api` and, in another terminal,
-`cd web && npm run dev` (http://localhost:5173, also on the LAN; proxies `/api` to port 8470).
-
-Every page has a **Menu** button (top right) for the rest of the app: Analyze a
-video, Courses, Videos (everything you've analyzed), Queue and Review flashcards,
-with counts of courses, waiting videos and cards due. The first page stays short:
-the form, the cards due today, the queue in one line, and your three latest videos.
-
-The video page shows a **watch map**: the whole video as one line, each section
-highlighted by how much it's worth (strong yellow: essential, fainter:
-recommended and optional, hatched: skip), with your playlist underlined and a
-red playhead. Click any stretch to play it. Playlist parts stop at their end
-and continue to the next part automatically.
-
-The **Notes** tab writes study notes on your playlist, the whole video, or parts
-you pick: a summary, key takeaways, notes by section (key points and an
-explanation of any method or mechanism), definitions, and what to do next. Every
-item has a timestamp; select it to play the video from that moment. Notes are
-saved, and can be downloaded as Markdown. With the local model, notes take about a
-minute per 20 minutes of video (68 s for a 26-minute playlist, 1 min 51 s for a
-72-minute video).
-
-The **Ask the video** tab answers questions about the video ("Explain the method
-at 23 minutes", "Compare GEPA and MIPROv2", "Where is X explained?"). Each part of an
-answer has the timestamps it's based on; general knowledge the video doesn't contain
-is shown in a separate box labeled "Not from the video", and questions the video
-doesn't cover say so. The conversation is saved, and follow-ups know what was
-asked before. With the local model, the first question about a video takes about
-40 s (the model reads the whole transcript) and follow-ups 5–10 s.
-
-The **Quiz and flashcards** tab writes a multiple-choice quiz and a deck of
-flashcards from the transcript of your playlist or the whole video (with the local
-model, about 50 s for a 26-minute playlist: 8 questions, 12 cards). After you check
-your answers, each question shows the right answer, why, and the moment in the video
-that explains it. Flashcards use spaced repetition: "Forgot" brings a card back in
-10 minutes, "Remembered" and "Easy" move it to a longer gap (1, 3, 7, 16, 35, then
-90 days). The home page shows how many cards are due, and the **review page**
-(`/review`) goes through the due cards from all your videos (each video's newest
-set).
-
-**Your goal is remembered.** The profile, goal and watch time you last used are
-saved on the server (so every device shares them) and filled in for the next video;
-`curio analyze` and `curio queue` use them too unless you pass `--profile` or
-`--objective`. Videos waiting in the queue keep the goal they were added with; the
-Queue page has a button to give them your current goal.
-
-**Queue for later** (beside "Find the best parts") adds a video to the overnight
-queue instead of analyzing it now. The server analyzes queued videos one at a time,
-oldest first, between 1 AM and 7 AM local time (`CURIO_QUEUE_HOURS`), and only while
-the GPU is idle: under 20% utilization (the median of five nvidia-smi readings, so a
-desktop's brief spikes don't count) and no Ollama model loaded by another program.
-Before each video it checks again, so if you start using the GPU at night the queue
-waits; a video being analyzed checks again about once a minute and, if something else
-is using the GPU, pauses and goes back into the queue. When it runs again it picks up
-after the last step it finished (outline, boundaries, ad check, and each batch of
-evaluations), so a pause loses little work. After each video it also writes the
-notes and a quiz with flashcards for its playlist, so they're ready in the morning
-(`CURIO_QUEUE_PREPARE=false` turns this off; if the GPU gets busy, they're skipped
-and you can write them from the video's page). The Queue page (in the menu) lists the
-queue with what it's waiting for, and each queued video can be started now or
-removed; the first page shows it in one line. Queuing a
-video that is already analyzed opens the existing result.
-
-**Your own playlist.** On a video page, **Edit the playlist** lists every part of
-the video: tick the ones you want (including parts Curio left out) and save. The
-player then follows your playlist, and a switch goes back to Curio's picks. It's saved
-on the server, so every device shows it.
-
-**Courses.** Paste a playlist link (`youtube.com/playlist?list=…`) into the box on
-the home page, or use "Add the whole playlist as a course" on a video link that names
-a playlist. Curio lists the lectures without downloading anything (newest-first
-playlists are put in lecture order by the numbers in the titles), checks each one's
-captions and queues the ones not analyzed yet with your goal. Videos you've already
-analyzed can also be grouped into a course by hand. On the course page, **Build the
-course playlist** picks the best parts across all analyzed lectures for one time
-budget (about 15 minutes a lecture by default), skips parts another lecture already
-teaches, and plays them in lecture order in one player. Its **Easy to miss** list
-gives 8–12 points from the course for your goal, each linked to the lecture moment
-that teaches it. Build it again when more lectures are analyzed; the page says when.
-The overnight queue does this itself: when it finishes a course's last waiting
-lecture, it rebuilds the course playlist with the length you chose last. **Ask the
-course** searches every analyzed lecture's transcript (keywords and embeddings) and
-answers from what it finds, saying which lecture says what, with a timestamp into each
-lecture. Name a lecture ("in lecture 6…", "the guest lecture") to look there first.
-
-The course page keeps the course map, the player and the course playlist on top
-(on wide screens the playlist scrolls on its own beside the player), with tabs
-below: **Easy to miss**; **Quiz and flashcards**: one quiz across the lectures (a
-question for each section of the course playlist, checked together, each answer
-linked to the moment in its lecture) and flashcards for each section and each
-"easy to miss" point, whose answer is the point itself (these cards are the course's
-own deck in your daily review, beside each lecture's; about 7 minutes for 7
-lectures with the local model); **Ask the course**; **Repeats**: every pair of
-similar sections the model compared, as left out, other repeats, or overlaps (each
-adds something), with why; and **Lectures**, with each lecture's state, arrows to
-put the lectures in your own order, the length of the course playlist, and building
-it again. Reordering takes effect at once without a rebuild; building again also
-redoes which of two repeated sections is kept.
-
-**Edit the course playlist** (beside the course playlist) lists every section of
-every analyzed lecture, with Curio's picks marked: tick the ones you want and save.
-You can switch between yours and Curio's picks, or go back to Curio's. Parts you
-kept stay watched, and the course quiz covers your playlist.
-
-**Learning paths.** With two or more courses, the Courses page can combine them
-(in the order you tick them) into a learning path: a course of its own with all their
-lectures (a video in two courses comes once), so the course playlist, repeats,
-checklist, questions and quiz work across courses.
-
-`curio analyze` prints the playlist and, with `--json out.json`, writes the full
-analysis. Results are cached in `data/curio.db`. Pass `--force` to re-analyze.
-
-## Run in Podman
-
-`curio.sh` builds one image (web app + API) and runs it with rootless Podman.
-Ollama stays on the host, so the GPU is used directly and no model is copied into
-the image.
+### Or run it directly
 
 ```bash
-./curio.sh build              # build the image (also done by start/run if missing)
-./curio.sh start              # start in the background; prints the local and LAN addresses
-./curio.sh status             # running? healthy? (exit code 1 when stopped)
-./curio.sh logs -f            # follow the server log
-./curio.sh stop               # stop and remove the container; analyses are kept
-./curio.sh restart
-./curio.sh run                # run in the foreground; Ctrl+C stops it
-./curio.sh analyze "<youtube url>" --profile technical   # one-off CLI analysis
-./curio.sh queue "<youtube url>"   # add to the overnight queue of the running container
-./curio.sh shell              # shell inside the running container
+uv sync                                    # install
+(cd web && npm install && npm run build)   # build the web app (again after updating)
+uv run curio api                           # → http://127.0.0.1:8470
 ```
 
-| Variable | Default | Meaning |
-|---|---|---|
-| `CURIO_PORT` | `8470` | host port (8000 is often taken; on this machine by another app) |
-| `CURIO_BIND` | `0.0.0.0` | host address the port is published on: all interfaces, so the LAN can reach it; `127.0.0.1` keeps it to this machine |
-| `CURIO_VOLUME` | `curio-data` | named volume holding the SQLite database |
-| `CURIO_OLLAMA_URL` | `http://host.containers.internal:11434` | Ollama as seen from the container |
-| `CURIO_GPU_CHECK` | `1` if an NVIDIA CDI spec exists | gives the container read access to the GPU (`--device nvidia.com/gpu=all`) so the overnight queue can see utilization; `0` = it checks only Ollama |
-| `CURIO_IMAGE` / `CURIO_CONTAINER` | `localhost/curio:latest` / `curio` | image and container names |
+This keeps its data in `data/curio.db`, separate from the container's.
 
-Notes:
-- Settings in `.env` (API key, models, weights) are passed to the container. The
-  database location and Ollama address are always set for the container, whatever
-  `.env` says for local runs.
-- Ollama must listen on all interfaces (it shows `*:11434` in `ss -ltn`; set
-  `OLLAMA_HOST=0.0.0.0` for the Ollama service if not). `start` checks that the
-  container can reach it and warns if not.
-- Rootless Podman's default network (`pasta`) resolves `host.containers.internal`
-  to the host's LAN address, which pasta treats as the container's own, so
-  connections are refused. The script maps `169.254.1.2` to the host
-  (`--map-guest-addr`) and points `host.containers.internal` at it.
-- The container runs as a non-root user. The image has a health check, built in
-  Docker format because the OCI format drops it.
-- The container gets the host's `/etc/localtime`, so queue hours are local time.
-  The GPU device is used only to read utilization with `nvidia-smi`; Ollama on the
-  host still does the work. Without a CDI spec (`sudo nvidia-ctk cdi generate
-  --output=/etc/cdi/nvidia.yaml`), the queue checks only Ollama's loaded models.
-- The container database (volume) is separate from `data/curio.db` used by local
-  `uv run` commands.
+## Analyze a video
 
-## Access from your network
+On the first page, paste a YouTube link and choose **what you're watching for**:
 
-Both `uv run curio api` and `./curio.sh start` listen on all interfaces and print
-the LAN address (for example `http://192.168.1.44:8470`). Two things to know:
+| Goal | Picks |
+|---|---|
+| General | The most important ideas, balanced between foundations and examples |
+| Beginner | Clear foundations and definitions; intros and recaps can help |
+| Technical | Implementation, architecture, code and demos |
+| Executive | Strategy, trade-offs, decisions and conclusions, in less time |
+| Deep dive | Advanced ideas and expert detail; a longer playlist |
 
-- **Firewall.** If ufw is active, allow the port, ideally only from your network:
+Under **Describe your own goal or set a watch time** you can say what you want in
+your own words ("I want to understand how GEPA works; skip the course logistics")
+and set how many minutes you have. Otherwise Curio picks about a third of the video.
+Your choice is remembered for next time, on every device.
+
+Then either:
+
+- **Find the best parts**: analyze now (a few minutes with a local model), or
+- **Queue for later**: analyze it tonight, when your GPU is free (see
+  [The overnight queue](#the-overnight-queue)).
+
+A video you've already analyzed with the same goal opens straight away.
+
+## The video page
+
+**The watch map** shows the whole video as one line: strong yellow is essential,
+fainter is recommended or optional, hatched is safe to skip. Your playlist is
+underlined and a red line shows where playback is. Click any stretch to play it.
+
+**Your playlist** sits beside the player. Each part says what you'll learn and why
+it's worth watching; parts play one after another and stop at their end. Tick a
+part as watched, or let it be ticked when it finishes.
+
+**Edit the playlist** lists every part of the video. Tick the ones you want,
+including parts Curio left out, and save. A switch flips between **Yours** and
+**Curio's picks**.
+
+Below the player:
+
+- **Notes**: study notes on your playlist, the whole video or parts you choose:
+  summary, key takeaways, notes by section, definitions and what to do next. Every
+  point links to the moment it's said. Download them as Markdown. About a minute per
+  20 minutes of video with a local model.
+- **Quiz and flashcards**: a multiple-choice quiz and a deck of flashcards. After you
+  check your answers, each question shows the right answer, why, and the moment that
+  explains it.
+- **Ask the video**: ask anything ("Explain the method at 23 minutes", "Where is X
+  explained?", "Compare A and B"). Answers link to the moments they come from.
+  Anything from general knowledge rather than the video is shown separately, marked
+  "Not from the video". Follow-up questions know what you asked before. The first
+  question takes about 40 s with a local model, follow-ups 5–10 s.
+- **More to watch**: good parts that didn't fit your time.
+- **Safe to skip**: what was left out, and why (intros, housekeeping, sponsor reads,
+  repeats).
+- **How it was scored**: every part's ratings and each adjustment, with its reason.
+
+## Flashcard review
+
+The first page shows how many cards are due; **Review now** (or **Review flashcards**
+in the menu) goes through them from all your videos and courses. Grade each card
+**Forgot** (back in 10 minutes), **Remembered** or **Easy** (keys 1, 2, 3). Cards you
+know come back after longer and longer gaps: 1, 3, 7, 16, 35, then 90 days.
+
+## The overnight queue
+
+**Queue for later** adds a video to a queue that Curio works through at night, so
+analysis never competes with your own GPU work:
+
+- It runs between **1 AM and 7 AM** local time, one video at a time, oldest first.
+- It starts a video only while the GPU is idle: under 20% busy and no other
+  program's model loaded in Ollama.
+- If you start using the GPU while a video is being analyzed, Curio pauses it within
+  about a minute and puts it back in the queue. When it runs again, it carries on where
+  it stopped; finished work isn't lost.
+- After each video it also writes the notes and a quiz with flashcards for your
+  playlist, so they're ready in the morning.
+
+The **Queue** page (in the menu) shows what's waiting and why it's waiting. You can
+start a video now, remove it, or give every waiting video your current goal. The
+container (or `curio api`) has to be running at night for the queue to work.
+
+## Courses
+
+Paste a **playlist** link (`youtube.com/playlist?list=…`) on the first page, or use
+**Add the whole playlist as a course** when a video link belongs to one. Curio lists
+the lectures, puts them in lecture order, and queues the ones not analyzed yet with
+your goal, so a course is usually ready the next morning. You can also make a course
+from videos you've already analyzed (**Make a course from videos you've analyzed**
+on the Courses page).
+
+On the course page, **Build the course playlist** picks the best parts across all
+the analyzed lectures for one length (about 15 minutes per lecture by default). It
+leaves out sections that another lecture teaches again, and plays everything in
+lecture order in one player. When the last queued lecture of a course finishes
+overnight, the playlist is rebuilt by itself.
+
+- **The course map** shows every lecture as one line, with the playlist's parts
+  highlighted and left-out repeats hatched.
+- **Edit the playlist** lists every section of every lecture, with Curio's picks
+  marked. Tick what you want and save; switch between **Yours** and **Curio's picks**,
+  or go back to Curio's. Parts you keep stay marked as watched.
+- **Easy to miss**: 8–12 points from the course that matter for your goal, each
+  linked to the lecture moment that teaches it.
+- **Quiz and flashcards**: a quiz on every part of the course playlist (yours, if
+  you made one) and flashcards, including one for each "easy to miss" point. About a
+  minute per lecture with a local model.
+- **Ask the course**: questions answered from every lecture at once, saying which
+  lecture says what. Name a lecture ("in lecture 6…", "the guest lecture") to look
+  there first.
+- **Repeats**: every pair of similar sections Curio compared across lectures, and
+  whether it judged them a repeat (watch one), an overlap (each adds something) or
+  different, with why.
+- **Lectures**: each lecture's state (analyzed, queued, failed…), arrows to put them
+  in your own order, the playlist length, and **Build again**. Reordering changes the
+  playlist straight away; building again also redoes which of two repeated sections
+  is kept.
+
+**Learning paths.** With two or more courses, **Combine courses into a learning path**
+on the Courses page joins them, in the order you pick, into one course, and
+everything above works across them.
+
+## Using it from your phone or another computer
+
+Curio listens on your whole local network and prints the address when it starts
+(for example `http://192.168.1.44:8470`). Open that on your phone; everything,
+including your goal and playlists, is shared between devices.
+
+- If a firewall is on, allow the port from your network only, for example
   `sudo ufw allow from 192.168.1.0/24 to any port 8470 proto tcp`.
-- **No login.** Anyone who can reach the port can analyze videos (which uses your
-  GPU, or your Anthropic credit) and see every analysis and set of notes. Only
-  expose it on networks you trust; never forward the port to the internet. Set
-  `CURIO_BIND=127.0.0.1` (Podman) or `--host 127.0.0.1` to turn LAN access off.
+- **There is no login.** Anyone who can reach the port can use Curio (your GPU or
+  your API credit) and see everything in it. Use it only on networks you trust and
+  never forward the port to the internet. To keep it on this computer only, set
+  `CURIO_BIND=127.0.0.1` (Podman) or run `uv run curio api --host 127.0.0.1`.
 
-## Configuration
+## Command line
 
-All settings are environment variables (or `.env`); see `.env.example`. The
-most important ones:
-
-| Variable | Default | Meaning |
-|---|---|---|
-| `CURIO_LLM_PROVIDER` | `auto` | `auto` uses Anthropic if `ANTHROPIC_API_KEY` (or `ANTHROPIC_AUTH_TOKEN`) is set, otherwise Ollama; `curio check-claude` tests a key |
-| `CURIO_LLM_MODEL` | provider default | model for all tasks; `CURIO_LLM_MODEL_OUTLINE` / `_EVALUATE` / `_NOTES` / `_ASK` / `_STUDY` / `_COURSE` override per task |
-| `CURIO_ASK_CONTEXT_TOKENS` | `0` (auto) | transcript tokens Ask may show the model; longer transcripts are searched |
-| `CURIO_EMBED_MODEL` | `nomic-embed-text` | Ollama embedding model for searching long transcripts; empty = keyword search only |
-| `CURIO_QUEUE_HOURS` | `1-7` | local hours when queued videos are analyzed (`22:30-6` crosses midnight); empty = any time the GPU is idle |
-| `CURIO_QUEUE_GPU_BUSY_PERCENT` | `20` | GPU utilization at which the queue waits |
-| `CURIO_QUEUE_PREPARE` | `true` | after each queued video, also write its playlist notes and quiz, and rebuild the course playlist when it was a course's last waiting lecture |
-| `CURIO_QUEUE_CHECK_S` | `60` | how often the server checks the queue; `0` turns the queue worker off |
-| `CURIO_OLLAMA_DEFAULT_MODEL` | `qwen3.8-64k` | local model |
-| `CURIO_OLLAMA_NUM_CTX` | `32768` | context size for every Ollama call (fixed, so the model loads once) |
-| `CURIO_ANTHROPIC_DEFAULT_MODEL` | `claude-opus-5-5` | cloud model |
-| `CURIO_WEIGHT_*` | 30/20/20/15/15 | rubric weights (educational value, novelty, practical, depth, relevance) |
-| `CURIO_BUDGET_FRACTION` | `0.30` | default playlist length as a fraction of the video (clamped to 10–35 min) |
-| `CURIO_TRANSCRIPT_LANGUAGES` | `en,en-US,en-GB` | preferred caption languages |
-| `CURIO_REFINE_BOUNDARIES` | `true` | place section starts at the exact sentence (one extra LLM call) |
-| `CURIO_DETECT_ADS` | `true` | cut sponsor reads out of content sections (one extra LLM call, only when ad-like text exists) |
-| `CURIO_DATABASE_URL` | `sqlite:///data/curio.db` | any SQLAlchemy URL |
-
-## How it works
-
-1. **Ingest:** yt-dlp reads metadata (no download). `youtube-transcript-api`
-   reads captions, preferring manual tracks over auto-generated ones.
-2. **Normalize:** cleans the caption cues (annotations, repeated auto-caption
-   lines) and merges them into 20–45 s *blocks*. Timestamps come from the original cues.
-3. **Outline (LLM):** the whole transcript in one prompt (or in overlapping
-   windows for very long videos). The model returns sections as block numbers, so
-   it can't invent a timestamp. Code repairs gaps and overlaps.
-4. **Exact starts (LLM):** for each boundary the model picks the first sentence of
-   the new section from the sentences around it, so a section starts where the
-   speaker changes topic. Auto-captions without reliable punctuation use single
-   caption cues (about 2.5 s) instead of sentences.
-5. **Ads (LLM):** sentences that look like ad copy are checked; confirmed sponsor
-   reads, including their segue, are cut out into their own always-skipped sections.
-6. **Evaluate (LLM):** each section is scored 1–10 on educational value,
-   novelty, practical value, depth and relevance, with the outline of the whole
-   video in view, plus what you'll learn, why it's worth watching,
-   dependencies and redundancy.
-7. **Score:** weighted rubric, half of it from the section's rank within the video,
-   plus rule-based adjustments (section kind, length, lexical and LLM-flagged
-   redundancy, new concepts, standalone, and a floor that keeps solid content
-   optional instead of "skip"). Every adjustment is shown in the UI with its reason.
-8. **Playlist:** essentials first, then by score within the time budget, pulling
-   in direct prerequisites when they fit. Adjacent picks are merged and the result is
-   chronological. Everything else is listed as "more to watch" or "safe to skip, because…".
-9. **Validate:** checks that timestamps are real caption times, that sections
-   tile the transcript without dropping speech, transcript coverage and budget,
-   repairing what it safely can.
-10. **Notes (LLM, on request):** the chosen sections' transcripts are shown as
-    numbered sentences; each point and definition names the sentence it comes from,
-    and code turns that into the sentence's cue time. A second, short call writes
-    the summary, takeaways and recommendations, each tied to section ids that are
-    checked against the notes.
-11. **Ask (LLM, on request):** the outline plus the whole transcript when it fits
-    the context (about 95 minutes of speech with Ollama's 32k, always with Claude);
-    otherwise the passages found by keyword (BM25) and embedding search, plus the
-    stretch the question names by time. Answer parts cite passage numbers, which code
-    turns into the start of the best-matching sentence in each passage.
-12. **Quiz and flashcards (LLM, on request):** like notes, sections as numbered
-    sentences, with a question and card budget per section; each item names the
-    sentence that answers it. The model writes the right answer and the wrong options
-    in separate fields; code shuffles them. A second call checks every question:
-    replaces "wrong" options that are also right and evens out option lengths; then,
-    for questions whose right answer is still noticeably the longest, up to two calls
-    rewrite only the wrong options to the right answer's length (never the right
-    answer). A question whose right answer names something the transcript never says
-    (a model, method or acronym) is dropped.
-13. **Course playlist (LLM, on request):** every watchable section of every analyzed
-    lecture. Embedding similarity finds each section's closest section in another
-    lecture; the model judges the closest pairs (repeat, overlap or different, and
-    which to keep) from summaries and transcript excerpts. One selection across the
-    course under one budget: once one half of a repeat is chosen, the other is ruled
-    out. A last call writes the checklist from the course outline; points that cite
-    no real section are dropped. Every judged pair is kept with its verdict.
-    The course quiz writes one set per lecture over just its course-playlist sections
-    (one question and one card each), then one call turns each checklist point into
-    a card question.
-14. **Ask the course (LLM, on request):** every lecture's transcript blocks, numbered
-    across the course. Search (BM25 plus embeddings, fused) picks passages with their
-    neighbours to fill the context; a lecture the question names is searched first.
-    Answer parts cite passage numbers, which code turns into a sentence start in that
-    lecture.
-
-## Tests
+Everything is also available from the terminal (with Podman, `./curio.sh analyze` and
+`./curio.sh queue` run these inside the container):
 
 ```bash
-uv run pytest           # offline: LLM, YouTube and metadata are faked
-uv run ruff check src tests
+uv run curio analyze "<youtube url>" --profile technical --objective "how GEPA works" --minutes 20
+uv run curio notes <analysis id> --scope playlist --out notes.md
+uv run curio ask <analysis id> "Where does the speaker explain GRPO?"
+uv run curio quiz <analysis id> --scope video
+uv run curio queue "<youtube url>"           # add to tonight's queue
+uv run curio queue                           # show the queue (--remove <id> to take one out)
+uv run curio course "<playlist url>"         # add a course
+uv run curio course <course id> --build --minutes 120
+uv run curio check-claude                    # check an Anthropic key with one tiny request
 ```
 
-## Limitations
+`analyze` uses your saved goal unless you pass `--profile` or `--objective`, prints the
+playlist, and `--json out.json` saves the full analysis. `--force` analyzes again.
 
-- Transcript access uses unofficial YouTube endpoints. YouTube may block IPs that
-  make many requests, and videos without captions can't be analyzed.
-- Local models are slower: about 2.5–4 minutes per 60–90-minute video on a 24 GB GPU
-  (qwen3.8 27B), more if another program shares the GPU.
-- Section starts are exact to a caption cue, not a word: captions carry no word
-  timings, so when a topic changes mid-cue (common in auto-captions) the start is a
-  few words early.
-- The overnight queue runs inside the API server (`curio api` or the container),
-  so the server must be running at night. GPU utilization is read from NVIDIA GPUs
-  only; on other hardware the queue relies on the hours and Ollama's loaded models.
-- Some videos can't be played on other sites (the owner turned embedding off; one
-  CS329Z lecture is like this). Curio still analyzes them; the player then shows a
-  link that opens that part on YouTube.
-- Course playlists compare lectures by their sections' summaries and transcript
-  excerpts, so a repeat inside a long section can be missed, and a lecture analyzed
-  for another goal is scored for that goal.
-- Picks vary somewhat between runs of the same video (the model's outline and
-  ratings aren't deterministic).
-- The coverage estimate is an AI judgment, not an objective measurement.
-- The Python package is named `curio_learn` because a top-level `curio` module
-  collides with the [curio](https://github.com/dabeaz/curio) async library, which
-  `sniffio` (used by httpx/Starlette) probes for. The product and CLI are still `curio`.
+## Settings
+
+Settings go in `.env` (see `.env.example`); the container picks them up on restart.
+
+| Setting | Default | What it does |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | — | use Claude instead of the local model |
+| `CURIO_LLM_PROVIDER` | `auto` | `auto` picks Claude when a key is set, otherwise Ollama |
+| `CURIO_OLLAMA_DEFAULT_MODEL` | `qwen3.8-64k` | local model |
+| `CURIO_ANTHROPIC_DEFAULT_MODEL` | `claude-opus-5-5` | Claude model |
+| `CURIO_LLM_MODEL_OUTLINE` / `_EVALUATE` / `_NOTES` / `_ASK` / `_STUDY` / `_COURSE` | — | a different model for one task |
+| `CURIO_EMBED_MODEL` | `nomic-embed-text` | embedding model for searching long transcripts and courses; empty = keyword search only |
+| `CURIO_QUEUE_HOURS` | `1-7` | when the queue runs (`22:30-6` crosses midnight; empty = whenever the GPU is idle) |
+| `CURIO_QUEUE_GPU_BUSY_PERCENT` | `20` | GPU use at which the queue waits |
+| `CURIO_QUEUE_PREPARE` | `true` | also write notes and a quiz after each queued video |
+| `CURIO_BUDGET_FRACTION` | `0.30` | default playlist length as a share of the video (10–35 min) |
+| `CURIO_TRANSCRIPT_LANGUAGES` | `en,en-US,en-GB` | caption languages to look for |
+| `CURIO_OLLAMA_NUM_CTX` | `32768` | context size for the local model |
+| `CURIO_WEIGHT_*` | 30/20/20/15/15 | how much educational value, novelty, practical value, depth and relevance count |
+
+For the container: `CURIO_PORT` (`8470`), `CURIO_BIND` (`0.0.0.0`), `CURIO_VOLUME`
+(`curio-data`) and `CURIO_OLLAMA_URL` (Ollama as the container sees it).
+
+## Good to know
+
+- **Captions are required.** Videos without captions can't be analyzed. Curio reads
+  captions through unofficial YouTube endpoints, and YouTube may block a computer
+  that makes very many requests.
+- **Some videos won't play inside Curio** because their owner turned off embedding.
+  They're still analyzed; the player shows a link to that moment on YouTube instead.
+- **Picks vary a little** between two analyses of the same video, and judgments like
+  "this repeats that lecture" are the model's opinion. Every pick shows its reasons,
+  and you can always edit the playlist.
+- **Section starts are exact to a caption line**, so on auto-captions a part can
+  start a few words early.
+- **The GPU check needs an NVIDIA GPU.** Elsewhere the queue goes by the hours and
+  Ollama's loaded models only. In Podman it needs the NVIDIA CDI spec
+  (`sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml`).
+- **A lecture analyzed for a different goal** can be used in a course meanwhile; the
+  course page says so and queues it again for the course's goal.
+
+## For developers
+
+How Curio works inside, the API and the data model are in
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md); what's been built, measured and what's
+next is in [docs/PROGRESS.md](docs/PROGRESS.md).
+
+```bash
+uv run pytest                  # offline: the model, YouTube and metadata are faked
+uv run ruff check src tests
+uv run curio api               # then, in another terminal:
+cd web && npm run dev          # http://localhost:5173, proxies /api to port 8470
+```
+
+The Python package is `curio_learn` because a top-level `curio` module collides with
+the [curio](https://github.com/dabeaz/curio) async library; the app and CLI are still
+called `curio`.

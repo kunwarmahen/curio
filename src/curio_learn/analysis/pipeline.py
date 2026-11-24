@@ -50,24 +50,26 @@ _STEP_NAMES = {
 class _Resume:
     """Finished steps of an earlier, interrupted run of the same analysis.
 
-    A checkpoint is `{"key", "step", "elapsed_s", "prefs", ...state}`. It is used only
-    when its key (models, pipeline version, transcript blocks, step switches) matches;
-    the evaluations also need the same learning goal, since a queued video's goal can
-    change while it waits.
+    A checkpoint is `{"key", "step", "elapsed_s", "prefs", ...state}`, where `step` is
+    the last finished step ("" while the outline is still being written; its finished
+    windows are in `partial_outline`). It is used only when its key (models, pipeline
+    version, transcript blocks, step switches) matches; the evaluations also need the
+    same learning goal, since a queued video's goal can change while it waits.
     """
 
     def __init__(self, checkpoint: dict | None, key: str, prefs_key: str, save: SaveCheckpoint):
-        ok = bool(checkpoint) and checkpoint.get("key") == key and checkpoint.get("step") in STEPS
-        if ok and checkpoint["step"] == "evaluate" and checkpoint.get("prefs") != prefs_key:
-            ok = False  # keep the outline, redo the evaluations
-            checkpoint = {**checkpoint, "step": checkpoint.get("before_evaluate", "")}
-            ok = checkpoint["step"] in STEPS
-        self.data: dict = checkpoint if ok else {}
+        data = dict(checkpoint) if checkpoint and checkpoint.get("key") == key else {}
+        if data.get("step") == "evaluate" and data.get("prefs") != prefs_key:
+            data["step"] = data.get("before_evaluate", "")  # keep the outline, redo the evaluations
+        if data.get("step") not in STEPS:
+            data["step"] = ""
+        self.data: dict = data
         self.key, self.prefs_key, self._save = key, prefs_key, save
         self.elapsed_before = float(self.data.get("elapsed_s", 0.0))
 
     def done(self, step: str) -> bool:
-        return bool(self.data) and STEPS.index(step) <= STEPS.index(self.data["step"])
+        current = self.data.get("step", "")
+        return current in STEPS and STEPS.index(step) <= STEPS.index(current)
 
     def save(self, step: str, elapsed_s: float, **state) -> None:
         before = self.data.get("step", "") if step == "evaluate" else ""
@@ -82,7 +84,23 @@ class _Resume:
         if step == "evaluate":
             self.data["before_evaluate"] = before
             self.data.pop("partial_evaluations", None)
+        if step == "outline":
+            self.data.pop("partial_outline", None)
         self._write(step)
+
+    def outline_windows(self) -> dict | None:
+        """Outline windows finished before a pause (the outline step itself wasn't)."""
+        return self.data.get("partial_outline")
+
+    def save_outline_windows(self, elapsed_s: float, state: dict) -> None:
+        self.data = {
+            **self.data,
+            "key": self.key,
+            "step": self.data.get("step", ""),
+            "partial_outline": state,
+            "elapsed_s": round(self.elapsed_before + elapsed_s, 1),
+        }
+        self._write("outline window")
 
     def partial(self) -> dict[str, SectionEvaluation]:
         """Evaluation batches finished before a pause, for the same goal."""
@@ -183,6 +201,8 @@ class AnalysisPipeline:
                     window_tokens=self._window_tokens(),
                     retries=s.llm_max_retries,
                     progress=progress,
+                    done=resume.outline_windows(),
+                    on_window=lambda state: resume.save_outline_windows(elapsed(), state),
                 )
             except ValueError as exc:
                 raise AnalysisError(f"Could not segment the transcript: {exc}") from exc

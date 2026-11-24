@@ -383,3 +383,36 @@ def test_a_pause_during_the_evaluations_keeps_the_finished_batches(settings):
     svc.run(other, progress=seen.append)
     assert not any("kept the evaluations" in m for m in seen)
     assert svc.repo.get_checkpoint(other) is None
+
+
+def test_a_pause_while_mapping_topics_keeps_the_finished_windows(settings):
+    from curio_learn.errors import Paused
+
+    small = settings.model_copy(update={"outline_window_tokens": 120, "ollama_num_ctx": 32768})
+    svc = CurioService(small, llm=FakeLLM(), metadata=FakeMetadata(), transcripts=FakeTranscripts())
+    fresh = svc.analyze(URL, LearningPreferences(profile="technical"))
+    windows = svc.llm.calls.count("OutlineOut")
+    assert windows >= 4 and "OverviewOut" in svc.llm.calls
+
+    def pause_after(n_outline):
+        analysis_id, _ = svc.submit(URL, LearningPreferences(profile="technical"), force=True)
+        svc.llm.calls.clear()
+        with pytest.raises(Paused):
+            svc.run(analysis_id, should_pause=lambda: "busy" if svc.llm.calls.count("OutlineOut") == n_outline else "")
+        cp = svc.repo.get_checkpoint(analysis_id)
+        assert cp["step"] == "" and cp["partial_outline"]["k"] == n_outline
+        svc.llm.calls.clear()
+        seen: list[str] = []
+        result = svc.run(analysis_id, progress=seen.append)
+        assert any("kept" in m and "topic map" in m for m in seen)
+        return result
+
+    # Paused between windows: only the rest are read.
+    resumed = pause_after(2)
+    assert svc.llm.calls.count("OutlineOut") == windows - 2
+    assert [s.model_dump() for s in resumed.sections] == [s.model_dump() for s in fresh.sections]
+    assert resumed.overview == fresh.overview
+    # Paused before the overview: no window is read again.
+    resumed = pause_after(windows)
+    assert svc.llm.calls.count("OutlineOut") == 0 and svc.llm.calls.count("OverviewOut") == 1
+    assert [s.model_dump() for s in resumed.sections] == [s.model_dump() for s in fresh.sections]

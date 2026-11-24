@@ -489,12 +489,25 @@ general goal, so flagged), on a copy of the database:
   no warnings). The same pause before this change redid batch 1 (67 s).
 - 1 new test (165 in total).
 
+### Outline windows saved on pause (2026-11-24)
+- A long transcript's outline saves its state after each window. A resumed run reads
+  only the windows left, or goes straight to the overview. The last evaluation batch is
+  now saved too: before, a pause at "Re-evaluating skipped sections" lost it. A pause
+  now loses no finished model call (pauses are checked only between calls).
+- Not yet tried live: the GPU was in use (45%, another program's model loaded in
+  Ollama) when this was ready.
+- 1 new test (166 in total).
+
+### README as a user guide (2026-11-24)
+The README now explains how to use Curio (getting started, analyzing a video, the
+video page, review, the queue, courses, LAN use, CLI, settings, things to know)
+instead of tracking what was built; build history and measurements stay here and the
+design in ARCHITECTURE. Podman internals moved from the README to ARCHITECTURE §8.
+
 ### Known gaps / next steps
 - The Anthropic provider has not been run against the live API (no credentials
   here); `curio check-claude` checks it with one tiny request.
 - Calibrate the scoring thresholds and the redundancy threshold on more videos
   (lectures, podcasts, tutorials with auto-captions).
-- A pause inside the outline step (several transcript windows on long videos) still
-  redoes the outline.
 - Repeat vs overlap verdicts vary run to run.
 - The made-up-names check covers names, not plain-word claims or numbers.

@@ -45,7 +45,7 @@ curio/
 ├── .env.example              every setting, no secrets
 ├── Containerfile             image: web app build + API runtime
 ├── curio.sh                  Podman build/start/stop/run/status/logs/analyze
-├── README.md                 install / configure / run
+├── README.md                 user guide: install, run, use the app, settings
 ├── docs/
 │   ├── ARCHITECTURE.md       this file
 │   └── PROGRESS.md           development log and milestone status
@@ -301,6 +301,22 @@ def generate_structured(provider, model_cls, *, system, user, task, retries=2) -
   checks that the port is free and that the container can reach Ollama.
 - The LLM stays on the host: the image holds no model, and with
   `ANTHROPIC_API_KEY` in `.env` Ollama isn't needed at all.
+- Settings in `.env` are passed with `--env-file`; the database location
+  (`sqlite:////app/data/curio.db`) and the Ollama address are always set for the
+  container, whatever `.env` says for local runs. The container database (volume) is
+  separate from `data/curio.db` used by local `uv run` commands.
+- Networking: rootless Podman's default network (`pasta`) resolves
+  `host.containers.internal` to the host's LAN address, which pasta treats as the
+  container's own, so connections are refused. The script maps `169.254.1.2` to the
+  host (`--map-guest-addr`) and points `host.containers.internal` at it. Ollama must
+  listen on all interfaces (`*:11434` in `ss -ltn`).
+- The image is built in Docker format, because the OCI format drops the health check.
+- The container gets the host's `/etc/localtime` (queue hours are local time) and,
+  when an NVIDIA CDI spec exists (`CURIO_GPU_CHECK`, default on then), `--device
+  nvidia.com/gpu=all`, used only to read utilization with `nvidia-smi`.
+- Container variables: `CURIO_PORT` (8470), `CURIO_BIND` (0.0.0.0), `CURIO_VOLUME`
+  (curio-data), `CURIO_OLLAMA_URL` (`http://host.containers.internal:11434`),
+  `CURIO_GPU_CHECK`, `CURIO_IMAGE` / `CURIO_CONTAINER`.
 
 ## 9. Learning notes (`analysis/notes.py`)
 
@@ -392,16 +408,22 @@ progress, and picks up where it stopped when the GPU is free.
 evaluations) the pipeline saves the state so far to `analysis_checkpoints` (one row per
 analysis: the step, the sections, repairs and warnings, the outline's overview and
 concepts, the evaluations, and the seconds spent). A run that finds a checkpoint skips
-the steps it covers, so a pause costs at most the step (or evaluation batch) it interrupted. A checkpoint is
+the steps it covers. A checkpoint is
 used only when its key matches: the pipeline version, provider and models, a hash of the
 transcript blocks, and the boundary and ad switches. The evaluations also need the same
 learning goal, since a queued video's goal can change while it waits; with a new goal
 the outline and boundaries are kept and only the evaluations are redone. The checkpoint
 is deleted when the analysis finishes or fails, or when it's taken out of the queue.
-Within the evaluations, each finished batch is saved too (`partial_evaluations`, with the
-goal it was written for), and a resumed run asks only the batches not done; batches
-are the same on both runs because the sections and batch size are. A pause inside the
-outline (between transcript windows) or the boundary step still redoes that step.
+Within steps, every model call that a pause could follow is saved too. A pause is only
+checked at a progress message, and those come between model calls. A long transcript's
+outline saves its state after each window (`partial_outline`: the sections so far, where
+the next window starts, the window size; `step` is still "" then), so a resumed run reads
+only the windows left, then writes the overview. Each finished evaluation batch is saved
+(`partial_evaluations`, with the goal it was written for), and a resumed run asks only
+the batches not done. Batches and windows come out the same on both runs, because the
+transcript, sections and sizes are the same. The boundary and ad steps report progress
+only before their calls, so a pause never interrupts them. A pause loses no finished
+model call.
 The worker remembers the last reason it waited, which `GET /queue` reports.
 
 **Preparing study material.** With `CURIO_QUEUE_PREPARE` (default on), the queued job

@@ -147,7 +147,12 @@ def generate_outline(
     window_tokens: int,
     retries: int = 2,
     progress: Callable[[str], None] = lambda _: None,
+    done: dict | None = None,
+    on_window: Callable[[dict], None] = lambda _: None,
 ) -> tuple[Outline, list[str]]:
+    """Segment the transcript. A long one is read in windows; after each window the
+    state so far goes to `on_window`, and given back as `done` (same transcript and
+    window size) a run interrupted between windows carries on from there."""
     total_tokens = approx_tokens(render_blocks(blocks))
     if total_tokens <= window_tokens:
         progress("Mapping the topics of the whole transcript")
@@ -180,6 +185,10 @@ def generate_outline(
     start = 0
     n_windows = len(_windows(blocks, window_tokens))
     k = 0
+    if done and done.get("window_tokens") == window_tokens:
+        collected = [OutlineSectionOut.model_validate(x) for x in done["collected"]]
+        start, k = int(done["start"]), int(done["k"])
+        progress(f"Resuming: kept {k} part(s) of the topic map")
     while start <= blocks[-1].index:
         k += 1
         remaining = blocks[start:]
@@ -222,6 +231,14 @@ def generate_outline(
             # Keep all but the last section; it may continue into the next window.
             collected.extend(window_sections[:-1])
             start = window_sections[-1].start_block
+        on_window(
+            {
+                "window_tokens": window_tokens,
+                "collected": [x.model_dump(mode="json") for x in collected],
+                "start": start,
+                "k": k,
+            }
+        )
 
     sections, more = build_sections(collected, blocks)
     repairs += more
