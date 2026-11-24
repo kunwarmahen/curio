@@ -69,3 +69,22 @@ class SegmentRow(Base):
     score: Mapped[float] = mapped_column(Float)
     in_playlist: Mapped[bool] = mapped_column(Boolean)
     completed: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class NotesRow(Base):
+    """Learning notes for one analysis and scope (playlist, whole video, or picked segments)."""
+
+    __tablename__ = "notes"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    analysis_id: Mapped[str] = mapped_column(ForeignKey("analyses.id", ondelete="CASCADE"), index=True)
+    scope: Mapped[str] = mapped_column(String(16))
+    scope_key: Mapped[str] = mapped_column(Text, index=True)
+    segment_ids: Mapped[list] = mapped_column(JSON, default=list)
+    llm_key: Mapped[str] = mapped_column(String(200), default="")
+    status: Mapped[str] = mapped_column(String(16), index=True)
+    progress: Mapped[str] = mapped_column(Text, default="")
+    error: Mapped[str] = mapped_column(Text, default="")
+    notes_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)

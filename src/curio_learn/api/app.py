@@ -8,12 +8,12 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from curio_learn.config import PROJECT_ROOT, get_settings
-from curio_learn.domain import AnalysisStatus, Block, LearningPreferences, VideoAnalysis
+from curio_learn.domain import AnalysisStatus, Block, LearningNotes, LearningPreferences, NotesScope, VideoAnalysis
 from curio_learn.errors import CurioError, InvalidURL
 from curio_learn.logging_setup import configure_logging
 from curio_learn.service import CurioService
@@ -35,6 +35,17 @@ class AnalyzeAccepted(BaseModel):
 
 class CompletedRequest(BaseModel):
     completed: bool
+
+
+class NotesRequest(BaseModel):
+    scope: NotesScope = NotesScope.PLAYLIST
+    segment_ids: list[str] = []
+    force: bool = False
+
+
+class NotesAccepted(BaseModel):
+    notes_id: str
+    status: AnalysisStatus
 
 
 _STATUS = {
@@ -111,6 +122,40 @@ def create_app(service: CurioService | None = None) -> FastAPI:
     def completed(analysis_id: str, request: Request):
         return sorted(svc(request).completed(analysis_id))
 
+    @app.post("/api/v1/analyses/{analysis_id}/notes", status_code=202, response_model=NotesAccepted)
+    def create_notes(analysis_id: str, body: NotesRequest, request: Request):
+        s = svc(request)
+        try:
+            notes_id, needs_run = s.submit_notes(analysis_id, body.scope, body.segment_ids, force=body.force)
+        except KeyError:
+            raise HTTPException(404, {"code": "not_found", "message": "Unknown analysis id"}) from None
+        if needs_run:
+            executor.submit(_run_notes_safely, s, notes_id)
+        current = s.get_notes(notes_id)
+        return NotesAccepted(notes_id=notes_id, status=current.status if current else AnalysisStatus.PENDING)
+
+    @app.get("/api/v1/analyses/{analysis_id}/notes", response_model=list[LearningNotes])
+    def list_notes(analysis_id: str, request: Request):
+        return svc(request).list_notes(analysis_id)
+
+    @app.get("/api/v1/notes/{notes_id}", response_model=LearningNotes)
+    def get_notes(notes_id: str, request: Request):
+        notes = svc(request).get_notes(notes_id)
+        if notes is None:
+            raise HTTPException(404, {"code": "not_found", "message": "Unknown notes id"})
+        return notes
+
+    @app.get("/api/v1/notes/{notes_id}/markdown", response_class=PlainTextResponse)
+    def notes_markdown(notes_id: str, request: Request):
+        text = svc(request).notes_markdown(notes_id)
+        if text is None:
+            raise HTTPException(404, {"code": "not_found", "message": "No finished notes with this id"})
+        return PlainTextResponse(
+            text,
+            media_type="text/markdown; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="curio-notes-{notes_id}.md"'},
+        )
+
     @app.get("/api/v1/videos/recent", response_model=list[RecentVideo])
     def recent(request: Request, limit: int = 10):
         return svc(request).recent(min(max(limit, 1), 50))
@@ -150,6 +195,13 @@ def _run_safely(service: CurioService, analysis_id: str) -> None:
         service.run(analysis_id)
     except Exception:  # status is already recorded as failed by the service
         log.warning("Analysis %s failed", analysis_id, exc_info=True)
+
+
+def _run_notes_safely(service: CurioService, notes_id: str) -> None:
+    try:
+        service.run_notes(notes_id)
+    except Exception:
+        log.warning("Notes %s failed", notes_id, exc_info=True)
 
 
 app = create_app()

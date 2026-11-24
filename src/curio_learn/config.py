@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     # Optional per-task overrides.
     llm_model_outline: str = ""
     llm_model_evaluate: str = ""
+    llm_model_notes: str = ""
     llm_max_retries: int = 2
     llm_temperature: float = 0.2
 
@@ -90,7 +91,11 @@ class Settings(BaseSettings):
         return "anthropic" if os.environ.get("ANTHROPIC_API_KEY") else "ollama"
 
     def model_for(self, task: str) -> str:
-        override = {"outline": self.llm_model_outline, "evaluate": self.llm_model_evaluate}.get(task, "")
+        override = {
+            "outline": self.llm_model_outline,
+            "evaluate": self.llm_model_evaluate,
+            "notes": self.llm_model_notes,
+        }.get(task, "")
         if override:
             return override
         if self.llm_model:

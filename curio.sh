@@ -13,7 +13,8 @@
 #
 # Settings (environment variables):
 #   CURIO_PORT          host port for the app                       (default 8470)
-#   CURIO_BIND          host address to publish on                  (default 127.0.0.1)
+#   CURIO_BIND          host address to publish on                  (default 0.0.0.0: every
+#                       device on your network can open it; 127.0.0.1 keeps it to this machine)
 #   CURIO_IMAGE         image name                                  (default localhost/curio:latest)
 #   CURIO_CONTAINER     container name                              (default curio)
 #   CURIO_VOLUME        named volume holding the SQLite database    (default curio-data)
@@ -25,7 +26,9 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 PORT="${CURIO_PORT:-8470}"
-BIND="${CURIO_BIND:-127.0.0.1}"
+BIND="${CURIO_BIND:-0.0.0.0}"
+# Where this machine reaches the app (0.0.0.0 is a bind address, not one to connect to).
+LOCAL="$([[ "$BIND" == "0.0.0.0" ]] && echo 127.0.0.1 || echo "$BIND")"
 IMAGE="${CURIO_IMAGE:-localhost/curio:latest}"
 NAME="${CURIO_CONTAINER:-curio}"
 VOLUME="${CURIO_VOLUME:-curio-data}"
@@ -52,10 +55,29 @@ env_args() {
 image_exists() { podman image exists "$IMAGE"; }
 
 ensure_port_free() {
-  if (exec 3<>"/dev/tcp/${BIND}/${PORT}") 2>/dev/null; then
+  if (exec 3<>"/dev/tcp/${LOCAL}/${PORT}") 2>/dev/null; then
     die "port ${PORT} is already in use on ${BIND} by another program. Choose another: CURIO_PORT=8471 ./curio.sh $1"
   fi
 }
+# The addresses to open Curio at, one per line: this machine, then the LAN.
+urls() {
+  echo "http://${LOCAL}:${PORT}"
+  if [[ "$BIND" == "0.0.0.0" ]]; then
+    local ip
+    for ip in $(hostname -I 2>/dev/null); do
+      # IPv4 LAN addresses only; skip container and VPN bridges.
+      [[ "$ip" =~ ^(10|172\.(1[6-9]|2[0-9]|3[01])|192\.168)\. ]] && [[ ! "$ip" =~ ^10\.88\. ]] && echo "http://${ip}:${PORT}"
+    done
+  fi
+}
+
+print_urls() {
+  local first=1 u
+  while read -r u; do
+    if ((first)); then echo "Curio is running at $u"; first=0; else echo "  on your network: $u"; fi
+  done < <(urls)
+}
+
 running() { [[ "$(podman container inspect -f '{{.State.Running}}' "$NAME" 2>/dev/null)" == "true" ]]; }
 
 build() {
@@ -90,7 +112,8 @@ container_args() {
 start() {
   ensure_image
   if running; then
-    echo "Curio is already running at http://${BIND}:${PORT}"
+    echo "Curio is already running."
+    print_urls
     return
   fi
   podman rm -f "$NAME" >/dev/null 2>&1 || true
@@ -101,9 +124,9 @@ start() {
   podman run -d --replace "${args[@]}" "$IMAGE" >/dev/null
   echo -n "Starting Curio"
   for _ in $(seq 60); do
-    if curl -sf --max-time 2 "http://${BIND}:${PORT}/api/v1/health" >/dev/null 2>&1; then
+    if curl -sf --max-time 2 "http://${LOCAL}:${PORT}/api/v1/health" >/dev/null 2>&1; then
       echo
-      echo "Curio is running at http://${BIND}:${PORT}"
+      print_urls
       check_container_ollama
       return
     fi
@@ -132,15 +155,16 @@ run_foreground() {
   check_ollama
   local -a args
   mapfile -t args < <(container_args)
-  echo "Curio will be at http://${BIND}:${PORT} (Ctrl+C to stop)"
+  urls | sed '1s/^/Curio will be at /; 2,$s/^/  on your network: /'
+  echo "(Ctrl+C to stop)"
   exec podman run --rm -it "${args[@]}" "$IMAGE"
 }
 
 status() {
   if running; then
     local health
-    health="$(curl -sf --max-time 2 "http://${BIND}:${PORT}/api/v1/health" 2>/dev/null || true)"
-    echo "Curio is running at http://${BIND}:${PORT}"
+    health="$(curl -sf --max-time 2 "http://${LOCAL}:${PORT}/api/v1/health" 2>/dev/null || true)"
+    print_urls
     [[ -n "$health" ]] && echo "Health: $health" || echo "Health check isn't answering yet."
   else
     echo "Curio isn't running."
@@ -167,7 +191,7 @@ case "${1:-}" in
   analyze) shift; analyze "$@" ;;
   shell) running || die "Curio isn't running."; podman exec -it "$NAME" bash ;;
   *)
-    sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'
     [[ -z "${1:-}" ]] || exit 1
     ;;
 esac

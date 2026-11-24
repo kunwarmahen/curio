@@ -113,6 +113,39 @@ class FakeLLM:
                     }
                 )
             return json.dumps({"evaluations": evals})
+        if name == "NotesOut":
+            import re
+
+            entries = []
+            for part in user.split("### ")[1:]:
+                sid = part.split(" ", 1)[0]
+                n = len(re.findall(r"^\d+\. ", part, re.M))
+                entries.append(
+                    {
+                        "section_id": sid,
+                        "points": [
+                            {"text": f"{sid} opens its topic.", "sentence": 1},
+                            {"text": f"{sid} ends with a result.", "sentence": n},
+                        ],
+                        "explanation": f"How {sid} works." if sid.endswith(("1", "3")) else "",
+                        "definitions": [{"term": f"term{sid}", "definition": f"Defined in {sid}.", "sentence": 2}],
+                    }
+                )
+            return json.dumps({"sections": entries})
+        if name == "NotesSummaryOut":
+            import re
+
+            ids = re.findall(r"^(S\d+) \[", user, re.M)
+            return json.dumps(
+                {
+                    "summary": "These parts explain the topics.",
+                    "takeaways": [
+                        {"text": "The first idea matters most.", "section_ids": [ids[-1], ids[0]]},
+                        {"text": "Something the notes never said.", "section_ids": ["S99"]},
+                    ],
+                    "recommendations": [{"text": "Try the method yourself.", "section_ids": [ids[0]]}],
+                }
+            )
         raise AssertionError(name)
 
 

@@ -8,7 +8,8 @@
 | **Phase 1: Functional MVP** | ✅ implemented, tested offline, verified end to end on 4 real videos (lecture, podcast, two auto-captioned talks), locally and in Podman |
 | Web UI | ✅ React + Vite with watch map and IFrame player (replaced Streamlit) |
 | Deployment | ✅ Podman image + `curio.sh` |
-| Phase 2: Intelligent learning | 🟡 partly done: learning profiles, custom objective, redundancy detection, skip recommendations, sentence-level boundaries and mid-roll ad removal are in. Learning notes are not. |
+| Phase 2: Intelligent learning | ✅ learning profiles, custom objective, redundancy detection, skip recommendations, sentence-level boundaries, mid-roll ad removal and learning notes |
+| LAN access | ✅ app and Podman container listen on all interfaces by default |
 | Phase 3: Interactive learning | ⏳ only segment completion tracking so far |
 | Phase 4: Multi-video intelligence | ⏳ not started |
 
@@ -31,7 +32,7 @@
 - `storage`: SQLAlchemy/SQLite (videos, transcripts, analyses, segments),
   cache keyed by video + preferences + model + pipeline version.
 - `service`, FastAPI (`/api/v1`), CLI. (A Streamlit UI was built first and then replaced; see the UI log below.)
-- 98 offline tests (ad detection and carving, sentence units and boundary refinement, URL parsing, normalization, segmentation repair, scoring and
+- 98 offline tests at the end of Phase 1 (105 with notes) (ad detection and carving, sentence units and boundary refinement, URL parsing, normalization, segmentation repair, scoring and
   calibration, playlist and prerequisites, validation, LLM retry, request shapes and
   truncation guard, service caching, stale runs, API).
 
@@ -237,10 +238,47 @@ Observations, not yet acted on:
   GPU contention is the likely cause. Not confirmed.
 - Outline variance is reduced, not eliminated: one anchored run is not proof.
 
+### Learning notes (2026-11-23)
+
+Built `analysis/notes.py`, a `notes` table, four API routes, `curio notes`, and a
+Notes tab (now the default tab on the video page). Design and grounding rules are in
+ARCHITECTURE.md §9. 7 new tests (105 in total): sentence numbers map to cue
+times, out-of-range numbers fall back and are counted, takeaways naming unknown
+sections are dropped, the three scopes, reuse and `force`, stale notes are failed
+at startup, the API flow and the Markdown export.
+
+Verified with Ollama (`qwen3.8-64k`) on stored analyses:
+
+| Video | Scope | Sections | Batches | Time |
+|---|---|---|---|---|
+| CS329Z lecture (manual captions) | playlist, 26 min | 4 | 1 | 68 s |
+| Kubernetes crash course (unpunctuated auto-captions) | whole video, 71 min | 16 | 2 | 1 min 51 s |
+
+- Every specific claim in the lecture notes was checked against the transcript at
+  its cited time: FireAct (34% vs 31%), "four models to keep in memory" for PPO,
+  GRPO beating PPO on math for DeepSeek-R1, Llama 2 fine-tuned on GPT-4 rollouts, Qwen3's AIME results (SFT 55%, RL 67%,
+  on-policy distillation 74%), GEPA improving faster than GRPO per rollout. All were
+  said, at the time cited. No sentence number was out of range in either run.
+- The cue-level units of auto-captions work as well: the Kubernetes notes cite
+  the right moments for Pods, Services, Ingress, ConfigMaps and the Minikube demo.
+- Browser check (Playwright, desktop and 390 px): notes render, selecting a
+  timestamp plays from that moment to the end of its segment and scrolls to the
+  player. A clip started from a note doesn't mark the segment watched.
+
+### LAN access (2026-11-23)
+
+`curio api` now defaults to `--host 0.0.0.0`, `curio.sh` to `CURIO_BIND=0.0.0.0`,
+and the Vite dev server to `host: true`. `curio.sh start/status/run` print the
+local address and the machine's LAN addresses (skipping Podman's 10.88 bridge);
+health and port checks use 127.0.0.1. Verified: the API answered on
+`http://192.168.1.44:8470` from this machine. ufw is active here, so other devices
+need `sudo ufw allow from 192.168.1.0/24 to any port 8470 proto tcp` (not run: it
+needs sudo). There is no login, which README documents.
+
 ### Known gaps / next steps
 - The Anthropic provider is covered by unit tests with a mocked client only.
   No API key was available, so it has not been run against the live API yet.
 - Calibrate the scoring thresholds and the redundancy threshold on more videos
   (lectures, podcasts, tutorials with auto-captions).
-- Phase 2: learning notes and takeaways. Phase 3: Ask the Video (retrieval over
+- Phase 3: Ask the Video (retrieval over
   blocks with `nomic-embed-text`), quizzes and flashcards, saved custom playlists.

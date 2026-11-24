@@ -77,6 +77,7 @@ curio/
 │   │   ├── validation.py     timestamp / coverage / consistency checks
 │   │   ├── boundaries.py     sentence-level section starts (step 6b)
 │   │   ├── ads.py            cut sponsor reads out of content sections (step 6c)
+│   │   ├── notes.py          learning notes, takeaways, definitions, Markdown export
 │   │   └── pipeline.py       orchestrates the steps, reports progress
 │   ├── storage/
 │   │   ├── orm.py            SQLAlchemy tables
@@ -128,10 +129,16 @@ Playlist        segments[] (chronological), total_s, original_s, time_saved_s,
 VideoAnalysis   id, video, preferences, overview, key_concepts[], sections[],
                 evaluations[], segments[], playlist, validation{warnings[]},
                 llm{provider, model}, created_at, status
+LearningNotes   id, analysis_id, scope (playlist|video|selected), segment_ids[],
+                status, progress, summary, takeaways[Takeaway], sections[SectionNotes],
+                recommendations[Takeaway], glossary[] (computed), watch_s, warnings[]
+SectionNotes    section_id, title, start_s, end_s, points[NotePoint(text, start_s)],
+                explanation, definitions[Definition(term, definition, start_s)]
+Takeaway        text, section_ids[], start_s (start of its earliest section)
 ```
 
 All timestamps derive from caption cues. The LLM refers to **block numbers** (outline)
-and **sentence numbers** (boundary refinement), never to raw seconds, so it cannot
+and **sentence numbers** (boundary refinement, ads, notes), never to raw seconds, so it cannot
 invent a timestamp: code converts the numbers to the original cue times.
 
 ## 5. API contract (FastAPI, `/api/v1`)
@@ -145,10 +152,14 @@ invent a timestamp: code converts the numbers to the original cue times.
 | `GET`  | `/videos/{video_id}/transcript` | `Transcript` (normalized blocks) |
 | `GET`  | `/analyses/{id}/completed` | ids of segments marked watched |
 | `PUT`  | `/analyses/{id}/segments/{segment_id}/completed` | `{completed: bool}` |
+| `POST` | `/analyses/{id}/notes` | `{scope, segment_ids?, force?}` → `202 {notes_id, status}`; runs in background on the same single worker as analyses. Reuses saved notes with the same scope and model unless `force`. |
+| `GET`  | `/analyses/{id}/notes` | `[LearningNotes]`, newest first |
+| `GET`  | `/notes/{id}` | `LearningNotes` (poll while `pending`/`running`) |
+| `GET`  | `/notes/{id}/markdown` | the notes as a Markdown download, with timestamp links into the video |
 
 Errors use `{"detail": {"code": "...", "message": "..."}}` with codes
 `invalid_url`, `video_unavailable`, `transcript_unavailable`, `rate_limited`,
-`llm_error`.
+`llm_error`, `analysis_error` (for notes: analysis not finished, unknown or empty selection).
 
 ## 6. Transcript acquisition strategy
 
@@ -216,7 +227,7 @@ def generate_structured(provider, model_cls, *, system, user, task, retries=2) -
   prompt, `think=False` for JSON calls, temperature 0.2.
 - **Claude:** `messages.stream` with `output_config.format` (JSON schema) and
   `effort`, adaptive thinking, server-side refusal fallback (`fallbacks: "default"`).
-- Per-task model selection: `CURIO_LLM_MODEL_OUTLINE`, `CURIO_LLM_MODEL_EVALUATE`,
+- Per-task model selection: `CURIO_LLM_MODEL_OUTLINE`, `CURIO_LLM_MODEL_EVALUATE`, `CURIO_LLM_MODEL_NOTES`,
   with `CURIO_LLM_MODEL` as the default.
 - Provider selection: `CURIO_LLM_PROVIDER=auto|ollama|anthropic`. `auto` picks
   Anthropic when `ANTHROPIC_API_KEY` is set, otherwise Ollama.
@@ -226,7 +237,7 @@ def generate_structured(provider, model_cls, *, system, user, task, retries=2) -
 ```
  host                                             container "curio" (rootless Podman)
  ┌──────────────────────────────┐                 ┌───────────────────────────────────┐
- │ browser → 127.0.0.1:8470 ────┼── published ───►│ :8000  uvicorn → FastAPI           │
+ │ browser → <host>:8470 ───────┼── published ───►│ :8000  uvicorn → FastAPI           │
  │                              │                 │         ├─ /api/v1  CurioService   │
  │ Ollama :11434 (GPU) ◄────────┼── 169.254.1.2 ──┤         └─ /       web/dist (SPA)  │
  │                              │  (pasta map)    │ /app/data ── volume "curio-data"   │
@@ -237,12 +248,37 @@ def generate_structured(provider, model_cls, *, system, user, task, retries=2) -
   3.12-slim with uv 0.11.7, `uv sync --frozen --no-dev`, a non-root user, and a
   health check on `/api/v1/health`.
 - `curio.sh`: build, start, stop, restart, run, status, logs, analyze, shell.
-  It publishes on `127.0.0.1` only, keeps the SQLite database in a named volume,
+  It publishes on all interfaces (`CURIO_BIND=0.0.0.0`, so the LAN can use it; there
+  is no login), prints the local and LAN addresses, keeps the SQLite database in a named volume,
   checks that the port is free and that the container can reach Ollama.
 - The LLM stays on the host: the image holds no model, and with
   `ANTHROPIC_API_KEY` in `.env` Ollama isn't needed at all.
 
-## 9. Phase 1 MVP milestone
+## 9. Learning notes (`analysis/notes.py`)
+
+Notes are generated on request, after an analysis, for one of three scopes: the
+playlist's sections, every section except sponsor reads and housekeeping, or
+segments the learner picks.
+
+1. **Section notes**, batched by transcript size like evaluation
+   (`CURIO_EVALUATE_BATCH_TOKENS` with Ollama, 60k tokens with Claude). The prompt
+   holds the learner brief and each section's sentence units, numbered. The model
+   returns, per section, 2–6 points and any definitions, each with a sentence
+   number, plus an explanation when the section explains a method. Code maps each
+   number to that sentence's cue time; an out-of-range number falls back to the
+   section's start and is reported in `warnings`. Skipped sections are retried once.
+2. **Summary**: one call over the notes (not the transcript) returns the summary,
+   3–7 takeaways and 0–5 recommendations, each with section ids. Ids outside the
+   notes are dropped and reported. If this call fails, the section notes are still
+   saved.
+
+Grounding is in the prompt (only what the section says, no outside facts) and in
+code (every time is a real cue time, every section id is checked). Notes are stored
+in their own table (`notes`) and keyed by analysis, scope, picked segments and
+model (`NOTES_VERSION`), so the same request returns the saved notes. Markdown
+export renders every timestamp as a link to the video at that second.
+
+## 10. Phase 1 MVP milestone
 
 **Done when:** pasting the test lecture (`e_m99aR7_3Q`, 80 min) produces a
 validated playlist of about 15–30 minutes in which every segment has an accurate

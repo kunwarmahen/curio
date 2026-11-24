@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ApiError, api, type Analysis, type Segment } from '../api'
+import { NotesPanel } from '../components/Notes'
 import { Player, type Clip } from '../components/Player'
 import { WatchMap, WatchMapLegend, type Stretch } from '../components/WatchMap'
 import { IMPORTANCE_LABEL, PROFILES, clock, duration } from '../format'
@@ -107,7 +108,7 @@ function Failed({ analysis }: { analysis: Analysis }) {
   )
 }
 
-type Tab = 'more' | 'skip' | 'scoring'
+type Tab = 'notes' | 'more' | 'skip' | 'scoring'
 
 function Results({ analysis }: { analysis: Analysis }) {
   const playlist = analysis.playlist!
@@ -121,7 +122,7 @@ function Results({ analysis }: { analysis: Analysis }) {
   })
   const [time, setTime] = useState<number | null>(null)
   const [continuous, setContinuous] = useState(true)
-  const [tab, setTab] = useState<Tab>('more')
+  const [tab, setTab] = useState<Tab>('notes')
 
   useEffect(() => {
     api.completed(analysis.id).then((ids) => setCompleted(new Set(ids)), () => {})
@@ -161,8 +162,26 @@ function Results({ analysis }: { analysis: Analysis }) {
 
   const onClipEnd = () => {
     if (!current) return
-    if (current.in_playlist && !completed.has(current.id)) toggleCompleted(current.id, true)
+    // A clip started from a note's timestamp is only part of the segment: don't mark it watched.
+    const whole = clip != null && clip.start_s <= current.start_s
+    if (whole && current.in_playlist && !completed.has(current.id)) toggleCompleted(current.id, true)
     if (continuous && index >= 0 && index < segs.length - 1) play(segs[index + 1])
+  }
+
+  /** Play from a moment cited in the notes to the end of its segment (or section). */
+  const seek = (t: number) => {
+    const sec = analysis.sections.find((s) => s.section.start_s <= t && t < s.section.end_s)?.section
+    const seg = sec ? bySection.get(sec.id) : undefined
+    setCurrentId(seg?.id ?? null)
+    setClip((c) => ({
+      key: seg?.id ?? sec?.id ?? 'note',
+      start_s: t,
+      end_s: seg?.end_s ?? sec?.end_s ?? t + 60,
+      nonce: (c?.nonce ?? 0) + 1,
+      autoplay: true,
+    }))
+    const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    document.querySelector('.watch')?.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'start' })
   }
 
   const pickStretch = (s: Stretch) => {
@@ -257,6 +276,9 @@ function Results({ analysis }: { analysis: Analysis }) {
 
       <section className="extras">
         <div className="tabs" role="tablist" aria-label="More about this video">
+          <TabButton id="notes" tab={tab} setTab={setTab}>
+            Notes
+          </TabButton>
           <TabButton id="more" tab={tab} setTab={setTab}>
             More to watch ({others.length})
           </TabButton>
@@ -268,6 +290,7 @@ function Results({ analysis }: { analysis: Analysis }) {
           </TabButton>
         </div>
         <div className="tabpanel" role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`}>
+          {tab === 'notes' && <NotesPanel analysis={analysis} onSeek={seek} />}
           {tab === 'more' && (
             <>
               <p className="muted">

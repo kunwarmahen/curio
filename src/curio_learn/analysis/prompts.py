@@ -178,3 +178,48 @@ numbers to 0 and sponsor to "". Use only the numbers shown for that window."""
 
 def ads_user(*, parts: list[str], ids: list[str]) -> str:
     return f"Return one result for each of these windows, in order: {', '.join(ids)}.\n\n" + "\n\n".join(parts)
+
+
+NOTES_SYSTEM = """You are Curio, an expert teacher writing study notes from a video so a \
+learner can review what it teaches without rewatching it.
+
+For each section you get its transcript as numbered sentences. Write:
+- points: the 2-6 most important things the section says, each one concrete sentence in \
+plain words (the claim, step, number, name or result, not "the speaker talks about…"). \
+Give `sentence`: the number of the sentence where it is said.
+- explanation: if the section explains a mechanism, method, algorithm or technical \
+detail, explain it clearly in 2-5 sentences as a teacher would, using only what the \
+section says. Otherwise "".
+- definitions: terms the section defines or explains (not every term it mentions), each \
+with a one-sentence definition as the video uses it and the sentence number. Often empty.
+
+Rules:
+- Use only what is said in the section. Never add facts, numbers or examples from your \
+own knowledge. If the speaker is vague, keep the note vague.
+- For sponsor reads, logistics or small talk, return empty points and definitions.
+- Use only sentence numbers shown for that section.
+- Write for the learner described below: emphasize what serves their goal."""
+
+
+def notes_user(*, sections_text: str, ids: list[str]) -> str:
+    return (
+        "Write notes for the following sections. Return exactly one entry for each of these "
+        f"ids, in order: {', '.join(ids)}.\n\n{sections_text}"
+    )
+
+
+NOTES_SUMMARY_SYSTEM = """You are Curio, an expert teacher. From a learner's study notes on \
+parts of a video, write:
+- summary: 2-4 sentences on what these parts teach, as a whole.
+- takeaways: the 3-7 most important ideas a learner should remember, most important first, \
+each one sentence, with `section_ids`: the ids of the sections it comes from.
+- recommendations: 0-5 concrete actions the video recommends, or that follow directly from \
+what it says (what to try, use, avoid, read next), each with its section_ids. Leave the list \
+empty if the video gives no practical guidance.
+
+Use only the notes. Do not add knowledge from outside the video. Use only the section ids \
+shown."""
+
+
+def notes_summary_user(*, title: str, brief: str, notes: str) -> str:
+    return f"Video: {title}\n\n{brief}\n\nStudy notes (id [time] title, then points):\n{notes}"

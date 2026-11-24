@@ -11,12 +11,14 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from curio_learn.domain import (
     AnalysisStatus,
+    LearningNotes,
     LearningPreferences,
+    NotesScope,
     Transcript,
     VideoAnalysis,
     VideoMetadata,
 )
-from curio_learn.storage.orm import AnalysisRow, Base, SegmentRow, TranscriptRow, VideoRow
+from curio_learn.storage.orm import AnalysisRow, Base, NotesRow, SegmentRow, TranscriptRow, VideoRow
 
 # A running analysis updates its row at every pipeline step; one that hasn't for this
 # long belongs to a process that died. The slowest step (a local-LLM call) is minutes.
@@ -227,7 +229,12 @@ class Repository:
                     AnalysisRow.status.in_([AnalysisStatus.PENDING.value, AnalysisStatus.RUNNING.value])
                 )
             ).all()
-            stale = [r for r in rows if _aware(r.updated_at) < cutoff]
+            notes = db.scalars(
+                select(NotesRow).where(
+                    NotesRow.status.in_([AnalysisStatus.PENDING.value, AnalysisStatus.RUNNING.value])
+                )
+            ).all()
+            stale = [r for r in [*rows, *notes] if _aware(r.updated_at) < cutoff]
             for row in stale:
                 row.status, row.error = AnalysisStatus.FAILED.value, "Interrupted: the process running it stopped."
             return len(stale)
@@ -276,3 +283,85 @@ class Repository:
                 )
             )
             return set(rows)
+
+    # ------------------------------------------------------------------- notes
+
+    def create_notes(
+        self, notes_id: str, analysis_id: str, scope: NotesScope, segment_ids: list[str], key: str, llm_key: str
+    ) -> None:
+        with self.session() as db, db.begin():
+            db.add(
+                NotesRow(
+                    id=notes_id,
+                    analysis_id=analysis_id,
+                    scope=scope.value,
+                    scope_key=key,
+                    segment_ids=segment_ids,
+                    llm_key=llm_key,
+                    status=AnalysisStatus.PENDING.value,
+                )
+            )
+
+    def update_notes_status(self, notes_id: str, status: AnalysisStatus, progress: str = "", error: str = "") -> None:
+        with self.session() as db, db.begin():
+            row = db.get(NotesRow, notes_id)
+            if row:
+                row.status, row.progress, row.error = status.value, progress, error
+
+    def save_notes(self, notes: LearningNotes) -> None:
+        with self.session() as db, db.begin():
+            row = db.get(NotesRow, notes.id)
+            if row is None:
+                raise KeyError(notes.id)
+            row.status, row.progress, row.error = notes.status.value, notes.progress, notes.error
+            row.notes_json = notes.model_dump(mode="json", exclude={"glossary", "watch_s"})
+
+    @staticmethod
+    def _notes_from_row(row: NotesRow) -> LearningNotes:
+        if row.notes_json:
+            return LearningNotes.model_validate(row.notes_json)
+        return LearningNotes(
+            id=row.id,
+            analysis_id=row.analysis_id,
+            video_id="",
+            scope=NotesScope(row.scope),
+            segment_ids=row.segment_ids or [],
+            status=AnalysisStatus(row.status),
+            progress=row.progress,
+            error=row.error,
+            created_at=_aware(row.created_at),
+        )
+
+    def get_notes(self, notes_id: str) -> LearningNotes | None:
+        with self.session() as db:
+            row = db.get(NotesRow, notes_id)
+            return self._notes_from_row(row) if row else None
+
+    def list_notes(self, analysis_id: str) -> list[LearningNotes]:
+        """Notes for an analysis, newest first."""
+        with self.session() as db:
+            rows = db.scalars(
+                select(NotesRow).where(NotesRow.analysis_id == analysis_id).order_by(NotesRow.created_at.desc())
+            )
+            return [self._notes_from_row(r) for r in rows]
+
+    def find_notes(
+        self, analysis_id: str, key: str, llm_key: str, *, stale_after: timedelta = STALE_AFTER
+    ) -> str | None:
+        """Id of finished or live notes with identical inputs."""
+        cutoff = datetime.now(UTC) - stale_after
+        with self.session() as db:
+            rows = db.scalars(
+                select(NotesRow)
+                .where(
+                    NotesRow.analysis_id == analysis_id,
+                    NotesRow.scope_key == key,
+                    NotesRow.llm_key == llm_key,
+                    NotesRow.status != AnalysisStatus.FAILED.value,
+                )
+                .order_by(NotesRow.created_at.desc())
+            )
+            for row in rows:
+                if row.status == AnalysisStatus.DONE.value or _aware(row.updated_at) >= cutoff:
+                    return row.id
+            return None

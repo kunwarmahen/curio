@@ -14,8 +14,10 @@ Curio is not a summarizer. Its goal is to maximize knowledge acquired per minute
 
 Phase 1 (functional MVP) is implemented: URL → metadata and transcript →
 topic segmentation → contextual evaluation → explainable scoring → time-budgeted
-playlist → validation → web app (React) with a watch map and an embedded player. Learning profiles
-and custom objectives from Phase 2 are included. See
+playlist → validation → web app (React) with a watch map and an embedded player. Phase 2 is
+complete: learning profiles, custom objectives, redundancy detection, skip
+recommendations and **learning notes** (key points, explanations, definitions,
+takeaways and recommendations, each linked to the moment it's said). See
 [docs/PROGRESS.md](docs/PROGRESS.md) for details and
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design.
 
@@ -41,19 +43,32 @@ cp .env.example .env    # optional: adjust settings / add ANTHROPIC_API_KEY
 
 ```bash
 (cd web && npm install && npm run build)   # once, and after frontend changes
-uv run curio api        # app → http://127.0.0.1:8470, API docs → /docs
+uv run curio api        # app → http://127.0.0.1:8470 and http://<this machine's LAN IP>:8470
 uv run curio analyze "https://www.youtube.com/watch?v=e_m99aR7_3Q" \
     --profile technical --objective "how GEPA optimizes prompts" --minutes 20
+uv run curio notes <analysis id> --scope playlist --out notes.md   # learning notes
 ```
 
+`curio api` listens on all interfaces, so phones and other computers on your
+network can open it at `http://<LAN IP>:8470`. Use `--host 127.0.0.1` to keep it
+on this machine. See "Access from your network" below.
+
 For frontend development, run `uv run curio api` and, in another terminal,
-`cd web && npm run dev` (http://localhost:5173, proxies `/api` to port 8470).
+`cd web && npm run dev` (http://localhost:5173, also on the LAN; proxies `/api` to port 8470).
 
 The video page shows a **watch map**: the whole video as one line, each section
 highlighted by how much it's worth (strong yellow: essential, fainter:
 recommended and optional, hatched: skip), with your playlist underlined and a
 red playhead. Click any stretch to play it. Playlist parts stop at their end
 and continue to the next part automatically.
+
+The **Notes** tab writes study notes on your playlist, the whole video, or parts
+you pick: a summary, key takeaways, notes by section (key points and an
+explanation of any method or mechanism), definitions, and what to do next. Every
+item has a timestamp; select it to play the video from that moment. Notes are
+saved, and can be downloaded as Markdown. With the local model, notes take about a
+minute per 20 minutes of video (68 s for a 26-minute playlist, 1 min 51 s for a
+72-minute video).
 
 `curio analyze` prints the playlist and, with `--json out.json`, writes the full
 analysis. Results are cached in `data/curio.db`. Pass `--force` to re-analyze.
@@ -66,7 +81,7 @@ the image.
 
 ```bash
 ./curio.sh build              # build the image (also done by start/run if missing)
-./curio.sh start              # start in the background → http://127.0.0.1:8470
+./curio.sh start              # start in the background; prints the local and LAN addresses
 ./curio.sh status             # running? healthy? (exit code 1 when stopped)
 ./curio.sh logs -f            # follow the server log
 ./curio.sh stop               # stop and remove the container; analyses are kept
@@ -79,7 +94,7 @@ the image.
 | Variable | Default | Meaning |
 |---|---|---|
 | `CURIO_PORT` | `8470` | host port (8000 is often taken; on this machine by another app) |
-| `CURIO_BIND` | `127.0.0.1` | host address the port is published on; use `0.0.0.0` to expose it on your network |
+| `CURIO_BIND` | `0.0.0.0` | host address the port is published on: all interfaces, so the LAN can reach it; `127.0.0.1` keeps it to this machine |
 | `CURIO_VOLUME` | `curio-data` | named volume holding the SQLite database |
 | `CURIO_OLLAMA_URL` | `http://host.containers.internal:11434` | Ollama as seen from the container |
 | `CURIO_IMAGE` / `CURIO_CONTAINER` | `localhost/curio:latest` / `curio` | image and container names |
@@ -100,6 +115,18 @@ Notes:
 - The container database (volume) is separate from `data/curio.db` used by local
   `uv run` commands.
 
+## Access from your network
+
+Both `uv run curio api` and `./curio.sh start` listen on all interfaces and print
+the LAN address (for example `http://192.168.1.44:8470`). Two things to know:
+
+- **Firewall.** If ufw is active, allow the port, ideally only from your network:
+  `sudo ufw allow from 192.168.1.0/24 to any port 8470 proto tcp`.
+- **No login.** Anyone who can reach the port can analyze videos (which uses your
+  GPU, or your Anthropic credit) and see every analysis and set of notes. Only
+  expose it on networks you trust; never forward the port to the internet. Set
+  `CURIO_BIND=127.0.0.1` (Podman) or `--host 127.0.0.1` to turn LAN access off.
+
 ## Configuration
 
 All settings are environment variables (or `.env`); see `.env.example`. The
@@ -108,7 +135,7 @@ most important ones:
 | Variable | Default | Meaning |
 |---|---|---|
 | `CURIO_LLM_PROVIDER` | `auto` | `auto` uses Anthropic if `ANTHROPIC_API_KEY` is set, otherwise Ollama |
-| `CURIO_LLM_MODEL` | provider default | model for all tasks; `CURIO_LLM_MODEL_OUTLINE` / `_EVALUATE` override per task |
+| `CURIO_LLM_MODEL` | provider default | model for all tasks; `CURIO_LLM_MODEL_OUTLINE` / `_EVALUATE` / `_NOTES` override per task |
 | `CURIO_OLLAMA_DEFAULT_MODEL` | `qwen3.8-64k` | local model |
 | `CURIO_OLLAMA_NUM_CTX` | `32768` | context size for every Ollama call (fixed, so the model loads once) |
 | `CURIO_ANTHROPIC_DEFAULT_MODEL` | `claude-opus-5-5` | cloud model |
@@ -148,6 +175,11 @@ most important ones:
 9. **Validate:** checks that timestamps are real caption times, that sections
    tile the transcript without dropping speech, transcript coverage and budget,
    repairing what it safely can.
+10. **Notes (LLM, on request):** the chosen sections' transcripts are shown as
+    numbered sentences; each point and definition names the sentence it comes from,
+    and code turns that into the sentence's cue time. A second, short call writes
+    the summary, takeaways and recommendations, each tied to section ids that are
+    checked against the notes.
 
 ## Tests
 

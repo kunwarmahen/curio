@@ -6,22 +6,33 @@ import logging
 import uuid
 from collections.abc import Callable
 
+from curio_learn.analysis.notes import generate_notes, scope_key, scope_sections, to_markdown
 from curio_learn.analysis.pipeline import AnalysisPipeline
 from curio_learn.config import Settings, get_settings
-from curio_learn.domain import AnalysisStatus, Block, LearningPreferences, VideoAnalysis, VideoMetadata
-from curio_learn.errors import CurioError
+from curio_learn.domain import (
+    AnalysisStatus,
+    Block,
+    LearningNotes,
+    LearningPreferences,
+    NotesScope,
+    VideoAnalysis,
+    VideoMetadata,
+)
+from curio_learn.errors import AnalysisError, CurioError
 from curio_learn.ingestion.metadata import MetadataProvider, YtDlpMetadataProvider
 from curio_learn.ingestion.transcripts import TranscriptProvider, YouTubeCaptionsProvider
 from curio_learn.ingestion.url import extract_video_id
 from curio_learn.llm.base import LLMProvider
 from curio_learn.llm.factory import build_provider
-from curio_learn.processing.normalize import build_blocks
+from curio_learn.processing.normalize import boundary_units, build_blocks
 from curio_learn.storage.repository import RecentVideo, Repository
 
 log = logging.getLogger(__name__)
 
 # Bump when pipeline changes should invalidate cached analyses.
 PIPELINE_VERSION = 5
+# Bump when notes generation changes should invalidate saved notes.
+NOTES_VERSION = 1
 
 Progress = Callable[[str], None]
 
@@ -163,3 +174,108 @@ class CurioService:
 
     def completed(self, analysis_id: str) -> set[str]:
         return self.repo.completed_segments(analysis_id)
+
+    # ------------------------------------------------------------------- notes
+
+    def notes_llm_key(self) -> str:
+        return f"{self.llm.name}:{self.settings.model_for('notes')}:n{NOTES_VERSION}"
+
+    def submit_notes(
+        self,
+        analysis_id: str,
+        scope: NotesScope = NotesScope.PLAYLIST,
+        segment_ids: list[str] | None = None,
+        *,
+        force: bool = False,
+    ) -> tuple[str, bool]:
+        """Register notes for an analysis. Returns (notes_id, needs_run).
+
+        Checks the scope up front so an empty or unknown selection fails fast. Reuses
+        finished or in-progress notes with identical inputs unless `force`.
+        """
+        analysis = self.repo.get_analysis(analysis_id)
+        if analysis is None:
+            raise KeyError(analysis_id)
+        if analysis.status != AnalysisStatus.DONE:
+            raise AnalysisError("Notes can be written once the analysis has finished.")
+        ids = sorted(set(segment_ids or [])) if scope is NotesScope.SELECTED else []
+        scope_sections(analysis, scope, ids)  # validates the selection
+        key, llm_key = scope_key(scope, ids), self.notes_llm_key()
+        if not force:
+            existing = self.repo.find_notes(analysis_id, key, llm_key)
+            if existing:
+                return existing, False
+        notes_id = uuid.uuid4().hex[:12]
+        self.repo.create_notes(notes_id, analysis_id, scope, ids, key, llm_key)
+        return notes_id, True
+
+    def run_notes(self, notes_id: str, progress: Progress = lambda _: None) -> LearningNotes:
+        pending = self.repo.get_notes(notes_id)
+        if pending is None:
+            raise KeyError(notes_id)
+
+        def report(msg: str) -> None:
+            log.info("[notes %s] %s", notes_id, msg)
+            self.repo.update_notes_status(notes_id, AnalysisStatus.RUNNING, msg)
+            progress(msg)
+
+        try:
+            report("Loading transcript")
+            analysis = self.repo.get_analysis(pending.analysis_id)
+            transcript = self.repo.get_transcript(analysis.video.video_id) if analysis else None
+            if analysis is None or transcript is None:
+                raise AnalysisError("The analysis or its transcript is no longer stored.")
+            anthropic = self.llm.name == "anthropic"
+            notes = generate_notes(
+                self.llm,
+                model=self.settings.model_for("notes"),
+                analysis=analysis,
+                units=boundary_units(transcript.cues),
+                scope=pending.scope,
+                segment_ids=pending.segment_ids,
+                notes_id=notes_id,
+                batch_tokens=60000 if anthropic else self.settings.evaluate_batch_tokens,
+                retries=self.settings.llm_max_retries,
+                progress=report,
+            )
+            notes.created_at = pending.created_at
+            self.repo.save_notes(notes)
+            return notes
+        except CurioError as exc:
+            self.repo.update_notes_status(notes_id, AnalysisStatus.FAILED, error=exc.message)
+            raise
+        except Exception as exc:
+            log.exception("Notes %s failed", notes_id)
+            self.repo.update_notes_status(notes_id, AnalysisStatus.FAILED, error=f"Unexpected error: {exc}")
+            raise
+
+    def notes(
+        self,
+        analysis_id: str,
+        scope: NotesScope = NotesScope.PLAYLIST,
+        segment_ids: list[str] | None = None,
+        *,
+        force: bool = False,
+        progress: Progress = lambda _: None,
+    ) -> LearningNotes:
+        """Synchronous convenience: submit and run (or return saved notes)."""
+        notes_id, needs_run = self.submit_notes(analysis_id, scope, segment_ids, force=force)
+        if not needs_run:
+            saved = self.repo.get_notes(notes_id)
+            if saved is not None and saved.status == AnalysisStatus.DONE:
+                return saved
+            notes_id, _ = self.submit_notes(analysis_id, scope, segment_ids, force=True)
+        return self.run_notes(notes_id, progress)
+
+    def get_notes(self, notes_id: str) -> LearningNotes | None:
+        return self.repo.get_notes(notes_id)
+
+    def list_notes(self, analysis_id: str) -> list[LearningNotes]:
+        return self.repo.list_notes(analysis_id)
+
+    def notes_markdown(self, notes_id: str) -> str | None:
+        notes = self.repo.get_notes(notes_id)
+        if notes is None or notes.status != AnalysisStatus.DONE:
+            return None
+        analysis = self.repo.get_analysis(notes.analysis_id)
+        return to_markdown(notes, analysis) if analysis else None

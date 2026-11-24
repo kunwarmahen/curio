@@ -251,3 +251,82 @@ class VideoAnalysis(BaseModel):
     transcript_generated: bool = False
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     elapsed_s: float = 0.0
+
+
+# --------------------------------------------------------------------------- notes
+
+
+class NotesScope(StrEnum):
+    PLAYLIST = "playlist"  # the sections in the curated playlist
+    VIDEO = "video"  # every section except sponsor reads and housekeeping
+    SELECTED = "selected"  # segments the learner picked
+
+
+class NotePoint(BaseModel):
+    """One statement from the video, at the real cue time where it is said."""
+
+    text: str
+    start_s: float
+
+
+class Definition(BaseModel):
+    term: str
+    definition: str
+    start_s: float
+    section_id: str = ""
+
+
+class SectionNotes(BaseModel):
+    section_id: str
+    title: str
+    start_s: float
+    end_s: float
+    points: list[NotePoint] = Field(default_factory=list)
+    explanation: str = ""
+    definitions: list[Definition] = Field(default_factory=list)
+
+
+class Takeaway(BaseModel):
+    """A takeaway or recommendation, tied to the sections it comes from."""
+
+    text: str
+    section_ids: list[str] = Field(default_factory=list)
+    start_s: float = 0.0
+
+
+class LearningNotes(BaseModel):
+    id: str
+    analysis_id: str
+    video_id: str
+    scope: NotesScope
+    segment_ids: list[str] = Field(default_factory=list)
+    status: AnalysisStatus = AnalysisStatus.PENDING
+    progress: str = ""
+    error: str = ""
+    summary: str = ""
+    takeaways: list[Takeaway] = Field(default_factory=list)
+    sections: list[SectionNotes] = Field(default_factory=list)
+    recommendations: list[Takeaway] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    llm: LLMInfo | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    elapsed_s: float = 0.0
+
+    @computed_field
+    @property
+    def glossary(self) -> list[Definition]:
+        """Every definition, first occurrence of each term, in video order."""
+        seen: set[str] = set()
+        out: list[Definition] = []
+        for s in self.sections:
+            for d in s.definitions:
+                key = d.term.strip().lower()
+                if key and key not in seen:
+                    seen.add(key)
+                    out.append(d)
+        return out
+
+    @computed_field
+    @property
+    def watch_s(self) -> float:
+        return round(sum(s.end_s - s.start_s for s in self.sections), 2)

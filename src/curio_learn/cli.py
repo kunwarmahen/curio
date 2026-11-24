@@ -1,4 +1,4 @@
-"""Command-line entry point: `curio analyze <url>` and `curio api`."""
+"""Command-line entry point: `curio analyze <url>`, `curio notes <analysis id>` and `curio api`."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from curio_learn.config import get_settings
-from curio_learn.domain import LearningPreferences, LearningProfile, VideoAnalysis, fmt_ts
+from curio_learn.domain import LearningPreferences, LearningProfile, NotesScope, VideoAnalysis, fmt_ts
 from curio_learn.errors import CurioError
 from curio_learn.logging_setup import configure_logging
 
@@ -45,8 +45,16 @@ def main(argv: list[str] | None = None) -> int:
     an.add_argument("--force", action="store_true", help="Ignore cached analysis")
     an.add_argument("--json", type=Path, help="Write the full analysis JSON here")
 
+    nt = sub.add_parser("notes", help="Write learning notes for a finished analysis")
+    nt.add_argument("analysis_id")
+    nt.add_argument("--scope", choices=[s.value for s in NotesScope], default="playlist")
+    nt.add_argument("--segments", default="", help="Comma-separated segment ids (with --scope selected)")
+    nt.add_argument("--force", action="store_true", help="Write new notes even if saved ones exist")
+    nt.add_argument("--out", type=Path, help="Write the Markdown here instead of printing it")
+
     api = sub.add_parser("api", help="Run the API server (also serves the built web UI)")
-    api.add_argument("--host", default="127.0.0.1")
+    # All interfaces, so phones and laptops on the LAN can use it. --host 127.0.0.1 keeps it local.
+    api.add_argument("--host", default="0.0.0.0")
     api.add_argument("--port", type=int, default=8470)
 
     args = parser.parse_args(argv)
@@ -69,6 +77,34 @@ def main(argv: list[str] | None = None) -> int:
         print_analysis(result)
         if args.json:
             args.json.write_text(json.dumps(result.model_dump(mode="json"), indent=2))
+        return 0
+    if args.cmd == "notes":
+        from curio_learn.service import CurioService
+
+        service = CurioService(settings)
+        segments = [x.strip() for x in args.segments.split(",") if x.strip()]
+        try:
+            notes = service.notes(
+                args.analysis_id,
+                NotesScope(args.scope),
+                segments,
+                force=args.force,
+                progress=lambda m: print(f"… {m}", flush=True),
+            )
+        except KeyError:
+            print(f"Error: no analysis with id {args.analysis_id}", file=sys.stderr)
+            return 1
+        except CurioError as exc:
+            print(f"Error ({exc.code}): {exc.message}", file=sys.stderr)
+            return 1
+        text = service.notes_markdown(notes.id) or ""
+        if args.out:
+            args.out.write_text(text)
+            print(f"Wrote {args.out}")
+        else:
+            print(text)
+        for w in notes.warnings:
+            print(f"Warning: {w}", file=sys.stderr)
         return 0
     if args.cmd == "api":
         import uvicorn

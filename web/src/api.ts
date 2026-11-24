@@ -118,6 +118,55 @@ export interface RecentVideo {
   watch_map: MapStretch[]
 }
 
+export type NotesScope = 'playlist' | 'video' | 'selected'
+
+export interface NotePoint {
+  text: string
+  start_s: number
+}
+
+export interface Definition {
+  term: string
+  definition: string
+  start_s: number
+  section_id: string
+}
+
+export interface SectionNotes {
+  section_id: string
+  title: string
+  start_s: number
+  end_s: number
+  points: NotePoint[]
+  explanation: string
+  definitions: Definition[]
+}
+
+export interface Takeaway {
+  text: string
+  section_ids: string[]
+  start_s: number
+}
+
+export interface Notes {
+  id: string
+  analysis_id: string
+  scope: NotesScope
+  segment_ids: string[]
+  status: Status
+  progress: string
+  error: string
+  summary: string
+  takeaways: Takeaway[]
+  sections: SectionNotes[]
+  recommendations: Takeaway[]
+  glossary: Definition[]
+  warnings: string[]
+  watch_s: number
+  created_at: string
+  elapsed_s: number
+}
+
 export class ApiError extends Error {
   code: string
   constructor(code: string, message: string) {
@@ -160,5 +209,13 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ completed }),
     }),
+  notesList: (analysisId: string) => request<Notes[]>(`/analyses/${encodeURIComponent(analysisId)}/notes`),
+  writeNotes: (analysisId: string, scope: NotesScope, segmentIds: string[] = [], force = false) =>
+    request<{ notes_id: string; status: Status }>(`/analyses/${encodeURIComponent(analysisId)}/notes`, {
+      method: 'POST',
+      body: JSON.stringify({ scope, segment_ids: segmentIds, force }),
+    }),
+  notes: (id: string) => request<Notes>(`/notes/${encodeURIComponent(id)}`),
+  notesMarkdownUrl: (id: string) => `/api/v1/notes/${encodeURIComponent(id)}/markdown`,
   recent: () => request<RecentVideo[]>('/videos/recent?limit=12'),
 }
