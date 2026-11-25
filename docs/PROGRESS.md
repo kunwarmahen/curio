@@ -759,6 +759,14 @@ lectures or section by section, your choice; watched anywhere counts as covered)
   a curriculum by hand, the panel, switching the order; no page errors, no sideways
   scroll. 9 new tests (192 in total).
 
+### Curricula: queue missing lectures, your own playlist in section order (2026-11-25)
+- Making a curriculum queues, in the background, the lectures of its courses that have
+  no analysis at all, with the curriculum's goal (as importing a course does). A lecture
+  analyzed for another goal is used as it is, not queued again.
+- The learner's own course playlist follows the section-by-section order when the plan
+  on screen was built that way (it played in lecture order before).
+- 2 new tests (194 in total).
+
 ### Known gaps / next steps
 - Curricula match needs to concepts by words, not meaning: "LLM" and "large language
   model" don't match, and a vague prerequisite ("Python basics") can match a talk that
@@ -766,9 +774,6 @@ lectures or section by section, your choice; watched anywhere counts as covered)
 - Section by section only reorders what the playlist holds: when the section that
   teaches a need doesn't fit the time, nothing moves (seen with Karpathy put last by
   hand in a 3-hour playlist).
-- The learner's own course playlist plays in lecture order even in a curriculum set to
-  section by section.
-- A curriculum doesn't queue lectures of its courses that aren't analyzed yet.
 - The Anthropic provider has not been run against the live API (no credentials
   here); `curio check-claude` checks it with one tiny request.
 - Scores are capped at 100, so with the beginner foundation bonus several top sections

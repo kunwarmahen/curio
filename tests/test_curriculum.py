@@ -187,3 +187,42 @@ def test_the_queue_rebuilds_a_curriculum_like_a_course(service):
     built = service.rebuild_courses_after(c)  # the video finished: every course it's in is rebuilt
     plans = {service.repo.get_course_plan(p).course_id for p in built}
     assert cid in plans
+
+
+def test_a_curriculum_queues_only_lectures_never_analyzed(service):
+    from curio_learn.domain import LearningPreferences, LectureState
+
+    a, b = analyze(service, VIDS[0]), analyze(service, VIDS[1])
+    other = analyze(service, VIDS[2], LearningPreferences())  # another goal: used as it is
+    course_id = service.group_course("Agents course", [a, b])
+    data = service.repo.get_course(course_id)
+    new = {"video_id": "ddddddddddd", "title": "Lecture 3", "duration_s": 600}
+    service.repo.update_course(course_id, lectures=[*data["lectures"], new])  # a lecture never analyzed
+    cid = service.create_curriculum(
+        "Build agents", [CurriculumSource(kind="course", id=course_id), CurriculumSource(kind="video", id=other)]
+    )
+    assert service.curriculum_missing(cid) == ["ddddddddddd"]
+    service.queue_course(cid)
+    states = {lec.video_id: lec.state for lec in service.course(cid).lectures}
+    assert states["ddddddddddd"] is LectureState.QUEUED
+    assert states[VIDS[2]] is LectureState.OTHER_GOAL  # not queued again for this goal
+    assert service.curriculum_missing(cid) == []
+
+
+def test_your_own_playlist_follows_a_section_by_section_curriculum(service, monkeypatch):
+    import curio_learn.analysis.course as course_mod
+
+    course_id, a, b, c = _library(service)
+    cid = service.create_curriculum(
+        "Build agents",
+        [CurriculumSource(kind="course", id=course_id), CurriculumSource(kind="video", id=c)],
+        order="sections",
+    )
+    # Stand in for a real reorder: the curriculum's section order reversed.
+    monkeypatch.setattr(course_mod, "order_sections", lambda placed, sources, order: [p.key for p in placed][::-1])
+    plan = service.course_plan(cid, minutes=10)
+    assert plan.order == "sections"
+    mine = [f"{p.analysis_id}:{sid}" for p in plan.parts for sid in p.section_ids]
+    course = service.set_course_playlist(cid, mine[:-1])  # Curio's picks minus one: the learner's own
+    lectures = [p.lecture for p in course.custom_parts]
+    assert lectures == sorted(lectures, reverse=True)  # the curriculum's order, not lecture order

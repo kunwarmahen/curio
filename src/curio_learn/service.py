@@ -799,13 +799,20 @@ class CurioService:
     def queue_course(self, course_id: str) -> None:
         """Fetch each lecture's transcript and queue the lectures that aren't analyzed (or
         waiting) for the course goal, in course order. Slow: one YouTube lookup per new
-        lecture. Records why a lecture couldn't be queued (no captions, for example)."""
+        lecture. Records why a lecture couldn't be queued (no captions, for example).
+        For a curriculum, only lectures with no analysis at all: one made for another
+        goal is used as it is."""
         course = self.repo.get_course(course_id)
         if course is None:
             raise KeyError(course_id)
+        skip: set[str] = set()
+        if self.repo.get_curriculum(course_id) is not None:
+            skip = {lec.video_id for lec in self._lectures(course) if lec.state is not LectureState.MISSING}
         try:
             for lec in course["lectures"]:
                 vid = lec["video_id"]
+                if vid in skip:
+                    continue
                 try:
                     self.submit(f"https://www.youtube.com/watch?v={vid}", course["preferences"], queue=True)
                     self.repo.set_course_error(course_id, vid, "")
@@ -1097,6 +1104,13 @@ class CurioService:
         self.order_curriculum(course_id)
         return course_id
 
+    def curriculum_missing(self, course_id: str) -> list[str]:
+        """Video ids of a course's lectures that have no analysis at all, nor one waiting."""
+        data = self.repo.get_course(course_id)
+        if data is None:
+            raise KeyError(course_id)
+        return [lec.video_id for lec in self._lectures(data) if lec.state is LectureState.MISSING]
+
     def set_curriculum(self, course_id: str, *, order: str | None = None, auto_order: bool | None = None) -> Course:
         """Change how a curriculum is ordered. Turning Curio's order back on reorders the
         lectures now; the playlist follows the next time it's built."""
@@ -1165,8 +1179,14 @@ class CurioService:
         """The learner's parts from the lectures the course uses now; sections of an
         analysis the course no longer uses are left out."""
         refs = {tuple(x.split(":", 1)) for x in picked if ":" in x}
+        cur = self.repo.get_curriculum(plan.course_id)
         return custom_course_parts(
-            self._course_lectures(lectures), refs, plan.pairs, PlaylistConfig(merge_gap_s=self.settings.merge_gap_s)
+            self._course_lectures(lectures),
+            refs,
+            plan.pairs,
+            PlaylistConfig(merge_gap_s=self.settings.merge_gap_s),
+            groups=cur["groups"] if cur else None,
+            by_section=plan.order == "sections",  # as the plan on screen; "Build again" applies a change
         )
 
     def course_playlist_sections(self, course_id: str) -> list[CourseSectionChoice]:

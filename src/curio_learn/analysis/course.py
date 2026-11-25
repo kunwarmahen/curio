@@ -419,10 +419,14 @@ def custom_course_parts(
     picked: set[tuple[str, str]],
     pairs: Sequence[CoursePair],
     config: PlaylistConfig,
+    *,
+    groups: dict[str, str] | None = None,
+    by_section: bool = False,
 ) -> list[CoursePart]:
     """The learner's own course playlist: the sections they picked, as `(analysis id,
     section id)`, made into parts the same way, with related sections from the pairs
-    the course playlist judged."""
+    the course playlist judged. In a curriculum built section by section (`by_section`,
+    with `groups` as for the plan), they play in that order too."""
     lectures = sorted(lectures, key=lambda lec: lec.position)
     items = [Item(f"L{lec.position}.{s.section.id}", lec, s) for lec in lectures for s in lec.analysis.sections]
     chosen = {it.key for it in items if (it.lecture.analysis.id, it.section.id) in picked}
@@ -434,7 +438,29 @@ def custom_course_parts(
                 k = key_of.get((x.analysis_id, x.section_id))
                 if k:
                     related.setdefault(k, []).append(y)
-    return course_parts(lectures, items, chosen, related, config)
+    sequence = None
+    if by_section and groups is not None and chosen:
+        sources = [
+            Source(
+                key=lec.analysis.video.video_id,
+                analysis=lec.analysis,
+                rank=lec.position,
+                group=groups.get(lec.analysis.video.video_id, ""),
+            )
+            for lec in lectures
+        ]
+        placed = [
+            Placed(
+                key=it.key,
+                source=it.lecture.analysis.video.video_id,
+                section_id=it.section.id,
+                start_s=it.section.start_s,
+            )
+            for it in items
+            if it.key in chosen
+        ]
+        sequence = order_sections(placed, sources, [s.key for s in sources])
+    return course_parts(lectures, items, chosen, related, config, sequence=sequence)
 
 
 def build_course_plan(

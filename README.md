@@ -231,8 +231,10 @@ curriculum**.
 You can switch the order on the curriculum's page any time (then **Build again**).
 Curio also leaves out what you've **already watched anywhere**, in a video's own
 playlist or any course. Everything a course has works for a curriculum too: the course
-playlist, pins, your own playlist, the checklist, Ask, quiz and flashcards. Moving a
-lecture by hand keeps your order until you press **Let Curio order them**.
+playlist, pins, your own playlist (which follows the section-by-section order too),
+the checklist, Ask, quiz and flashcards. Lectures of a chosen course that were never
+analyzed are queued for tonight; one analyzed for another goal is used as it is.
+Moving a lecture by hand keeps your order until you press **Let Curio order them**.
 
 ## Using it from your phone or another computer
 

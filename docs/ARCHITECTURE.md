@@ -635,8 +635,10 @@ order; everything above then works across courses.
 `curricula` (`goal`, `order_mode` `lectures` | `sections`, `groups` mapping each video
 to its source course or `""` for a single video, `auto_order`, `notes`), so the page,
 plan, pins, watched marks, Ask and practice all work unchanged. Its scoring goal is
-the one most of its analyses were made with; nothing is re-analyzed, and lectures not
-analyzed yet aren't queued.
+the one most of its analyses were made with; nothing is re-analyzed. Lectures with no
+analysis at all (`curriculum_missing`) are queued with that goal in the background, as
+an imported course's are (`queue_course` skips every other lecture of a curriculum,
+so one analyzed for another goal isn't queued again).
 - **Suggesting sources** (`suggest_sources`, one call, temperature 0): every course
   (not curricula) and every analyzed video outside them, with lecture titles or the
   overview and key concepts, under short ids (`c1`, …); the model says include or not
@@ -667,7 +669,8 @@ analyzed yet aren't queued.
   order, with a chosen teaching section pulled ahead of a chosen section of another
   course that needs it. `course_parts(sequence=…)` then merges only sections that
   follow each other in that order and in their lecture; `course()` doesn't re-sort
-  such a plan by lecture.
+  such a plan by lecture. The learner's own playlist follows the same order when the
+  plan on screen was built section by section (`custom_course_parts(by_section=…)`).
 - **Needs as prerequisites:** in both modes, a teaching section another course needs
   joins the needing section's `builds_on`, so the selector adds it when it fits (and it
   plays first). A plan only orders what it holds: when the teaching section doesn't

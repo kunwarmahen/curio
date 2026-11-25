@@ -423,7 +423,11 @@ def create_app(service: CurioService | None = None) -> FastAPI:
 
     @app.post("/api/v1/curricula", status_code=201, response_model=CourseAccepted)
     def create_curriculum(body: CurriculumRequest, request: Request):
-        course_id = svc(request).create_curriculum(body.goal, body.sources, title=body.title, order=body.order)
+        s = svc(request)
+        course_id = s.create_curriculum(body.goal, body.sources, title=body.title, order=body.order)
+        if s.curriculum_missing(course_id):  # lectures never analyzed: queue them, as for a course
+            s.repo.update_course(course_id, importing=True)
+            imports.submit(_queue_course_safely, s, course_id)
         return CourseAccepted(course_id=course_id)
 
     @app.put("/api/v1/courses/{course_id}/curriculum", response_model=Course)
