@@ -742,10 +742,21 @@ A curriculum adds, for one goal ("build agents"):
    sources).
 4. **One playlist**: the course selector (pins, unwatched first, repeats) over all
    sources, played in the curriculum's order.
-Open decisions: who picks the sources (learner, Curio, or Curio suggests and the
-learner confirms); whether Curio may reorder lectures within a course or only order
-whole courses and videos; whether "covered" includes videos analyzed but not watched;
-finding new YouTube videos for gaps is out of scope for a first version.
+Decided (2026-11-25):
+- **Sources:** Curio suggests courses and videos from the library for the goal; the
+  learner adds or removes before it builds.
+- **Order:** a setting per curriculum, chosen by the learner and changeable later
+  (the playlist rebuilds): *whole lectures* (default; lectures and videos ordered by
+  what builds on what, each keeping its own section order) or *section by section*
+  (sections from different lectures may interleave when one builds on another).
+- **Covered:** sections watched anywhere (any video playlist or course); analyzed but
+  unwatched videos count as new.
+- Finding new YouTube videos for gaps is out of scope for a first version.
+
+Build order: (1) suggest sources for a goal and confirm; (2) the dependency graph and
+both orderings, checked offline on CS329Z plus the other analyzed videos; (3) watched
+anywhere and repeats across sources in the selector; (4) the curriculum page (reusing
+the course page) with the order setting; (5) overnight rebuilds as for courses.
 
 ### Known gaps / next steps
 - The Anthropic provider has not been run against the live API (no credentials
