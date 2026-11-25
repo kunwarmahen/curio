@@ -214,6 +214,9 @@ def test_unsupported_names():
     assert unsupported_names("It uses GPT-4 to generate queries", said) == ["GPT-4"]
     assert unsupported_names("It uses ChatGPT to write queries for SFT on Llama-2", said) == []
     assert unsupported_names("It keeps the call with the lowest loss", said) == []
+    # A hyphen before a plain word ends the name: "API-only" is the API the video says.
+    assert unsupported_names("Use it for API-only models", "when you only have an API") == []
+    assert unsupported_names("It uses GPT-4o and A2A", "GPT-4o") == ["A2A"]
 
 
 def test_plain_numbers_are_not_names():

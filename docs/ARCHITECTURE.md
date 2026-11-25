@@ -477,7 +477,16 @@ made the plain right answer stand out instead). The right answer is never touche
 digit or an inner capital, and acronyms: GPT-4, ChatGPT, A2A, MCP) against the
 transcript of the sections in scope, ignoring spacing and hyphens. Any name not said
 drops the question, with a warning. Found because a quiz answered "GPT-4" where the
-Tools lecture only ever says ChatGPT.
+Tools lecture only ever says ChatGPT. A hyphen continues a name only before a capital
+or digit (GPT-4o), so "API-only" is checked as "API".
+
+**Numbers and plain-word claims aren't checked** (measured 2026-11-25 on 404 saved
+items: notes, quizzes, cards, answers). Only 2 had a number the video never says (both
+true Kubernetes facts, likely on screen). A model check of 120 items against their
+section found none whose main point is unsupported and 20 that add a detail the
+section doesn't say, nearly all true background (a Service's DNS name, etcd). Some of
+those are said in another section, so a per-section verifier would strip correct
+content, at about a minute per notes or quiz; the prompts already forbid outside facts.
 
 **Spaced repetition.** Leitner boxes: a card with no state is new (due now).
 "Forgot" puts it in box 1, due in 10 minutes (a lapse if it had been learned);

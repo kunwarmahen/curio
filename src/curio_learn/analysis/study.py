@@ -121,8 +121,11 @@ def clean_question(q: QuestionOut) -> tuple[str, list[str], int] | None:
 
 
 # Names a right answer can make up: a word with a digit or a capital inside it (GPT-4,
-# ChatGPT, MemGPT, A2A) or an acronym (RAG, MCP). Plain words aren't checked.
-_NAME_RE = re.compile(r"\b(?:[A-Za-z]+\d[\w.-]*|\d+[A-Za-z][\w-]*|[A-Za-z]+[A-Z][\w-]*|[A-Z]{2,}[\w-]*)")
+# ChatGPT, MemGPT, A2A) or an acronym (RAG, MCP). Plain words aren't checked. A hyphen
+# continues a name only before a capital or digit (GPT-4o), so "API-only" is checked as
+# "API", not as a name the video never says.
+_TAIL = r"[\w.]*(?:-[A-Z0-9][\w.]*)*"
+_NAME_RE = re.compile(rf"\b(?:[A-Za-z]+\d{_TAIL}|\d+[A-Za-z]{_TAIL}|[A-Za-z]+[A-Z]{_TAIL}|[A-Z]{{2,}}{_TAIL})")
 
 
 def _squash(text: str) -> str:

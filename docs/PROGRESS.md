@@ -688,6 +688,25 @@ verdicts match the majority of the 0.2 runs, about 73 s per run. `complete_json`
 `generate_structured` take an optional per-call `temperature`. 1 test extended, 1 new
 assertion (180 tests).
 
+### Numbers and claims in notes and quizzes, measured (2026-11-25)
+Before widening the made-up-names check, a scan of all saved output (live copy plus
+the dev database: 103 quiz questions, 139 cards, 77 note points, 18 explanations, 22
+definitions, 12 takeaways, 33 answer parts):
+- **Numbers the video never says:** 6, of which 4 are answers quoting a time ("at the
+  59-minute mark") and 2 are true Kubernetes facts (NodePort range 30000–32767, port
+  30100), likely on screen. Not worth a check.
+- **Names:** besides true on-screen names (HTTPS, configMapKeyRef), the check itself
+  misfired on "API-only", which would have dropped a quiz question. Fixed: a hyphen
+  continues a name only before a capital or digit.
+- **Plain-word claims**, judged by the model (temperature 0) against each item's own
+  section, 120 random items, 132 s: 100 supported, 20 add a detail the section doesn't
+  say, 0 with an unsupported main point. The additions are nearly all true background
+  (a Service's DNS name, etcd, "the teacher must be open-weight"); some are said in
+  another section of the video. A verifier pass was not built: it would strip correct
+  content and add about a minute per notes or quiz, and the prompts already forbid
+  outside facts.
+- 2 test assertions added (180 tests).
+
 ### Known gaps / next steps
 - The Anthropic provider has not been run against the live API (no credentials
   here); `curio check-claude` checks it with one tiny request.
@@ -705,4 +724,5 @@ assertion (180 tests).
   same worked example making the same point (ReAct on HotpotQA, L1 and L6; both in the
   playlist, about 2 minutes twice). The prompt was left alone: a stricter rule risks
   dropping real overlaps.
-- The made-up-names check covers names, not plain-word claims or numbers.
+- About 1 in 6 notes, cards and quiz answers adds a small detail its section doesn't say
+  (nearly always true background); left as is, see 2026-11-25.
