@@ -31,7 +31,15 @@ class AnthropicProvider:
         return anthropic.transform_schema(model_cls)
 
     def complete_json(
-        self, *, model: str, system: str, user: str, schema: dict, max_tokens: int, shared_prefix: str = ""
+        self,
+        *,
+        model: str,
+        system: str,
+        user: str,
+        schema: dict,
+        max_tokens: int,
+        shared_prefix: str = "",
+        temperature: float | None = None,  # not settable with adaptive thinking; ignored
     ) -> str:
         import anthropic
 

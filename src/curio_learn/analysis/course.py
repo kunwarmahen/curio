@@ -61,6 +61,10 @@ MIN_OPTIONAL_S = 120.0
 # A repeat's weaker half starts this many points lower, so the stronger half is tried first.
 REPEAT_PENALTY = 15.0
 PAIRS_PER_CALL = 12
+# Repeat verdicts are asked at temperature 0. At 0.2, three runs over CS329Z's 60 pairs
+# disagreed on 10; every "repeat" was a one-in-three call, so a rebuild could drop a
+# section one day and keep it the next. At 0 the runs were identical.
+PAIR_TEMPERATURE = 0.0
 
 
 class PairVerdictOut(BaseModel):
@@ -227,6 +231,7 @@ def judge_pairs(
             max_tokens=90 * len(batch) + 300,
             retries=retries,
             task=f"course[overlap {n}]",
+            temperature=PAIR_TEMPERATURE,
         )
         for v in out.verdicts:
             p = by_id.get(v.pair.strip().lower())

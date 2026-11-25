@@ -229,3 +229,12 @@ def test_foundation_bonus_skips_intros_and_ignores_unknown_ids():
     scored = score_sections(secs, evs, LearningPreferences(profile=LearningProfile.BEGINNER), ScoringConfig(weights=W))
     assert not any(a.rule == "foundation" for a in scored[0].score.adjustments)  # an intro
     assert any(a.rule == "foundation" for a in scored[1].score.adjustments)
+
+
+def test_related_sections_sharing_vocabulary_are_not_called_repeats():
+    # Two different Kubernetes demos shared YAML words (0.50 overlap); not a repeat.
+    secs = [section(0), section(1)]
+    evs = {"S00": ev("S00", 6), "S01": ev("S01", 8)}
+    sim = [[1.0, 0.5], [0.5, 1.0]]
+    scored = score_sections(secs, evs, LearningPreferences(), ScoringConfig(weights=W), sim)
+    assert not any(a.rule == "lexical_overlap" for s in scored for a in s.score.adjustments)

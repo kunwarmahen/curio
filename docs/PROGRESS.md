@@ -652,15 +652,52 @@ next time it's built. 2 new tests (177 in total).
 - 2 new tests (179 in total). Saved analyses and course plans change only when rebuilt
   or re-run.
 
+### Ties at 100, and the wording-overlap threshold (2026-11-24)
+- **Ties at 100: tried and dropped.** Sorting sections by what their score added up to
+  before the 100 cap (from the saved base rating and adjustments) changed only
+  Kubernetes for beginners, and for the worse: the MongoDB demo (106.7 uncapped, 9 min)
+  went in first and pushed out ConfigMaps and Secrets (97), Volumes (86) and the
+  ConfigMap demo (97). The cap keeps long demos from piling up bonus points. Kubernetes
+  Architecture scores 94.6, just under the 95 top-section line, so it was never tied;
+  it lost its place to the half reserved for top sections, a fair trade for Deployments
+  (100).
+- **Wording overlap counts as a repeat from 0.55, not 0.45.** Across 19 saved analyses
+  (about 400 sections) one pair reached 0.45: two different Kubernetes demos sharing
+  YAML words (0.50; the model didn't call them repeats). The 25 pairs at 0.30–0.45 are
+  neighbouring sections on related topics (PPO vs. GRPO, two LangGraph demos); the
+  model agrees with one of them. Real repeats come from the model's `redundant_with`;
+  the overlap check stays for near-verbatim ones. No score, label or pick changes in
+  the saved analyses (the demo pair tied at 89, so neither was marked down).
+- 1 new test (180 in total).
+
+### Steady repeat verdicts (2026-11-24)
+The course repeat check now asks at temperature 0 (the rest of the pipeline stays at
+0.2; Claude ignores it, since adaptive thinking takes no temperature). CS329Z's 60
+candidate pairs, judged three times each on a copy of the live database:
+
+| Temperature | Pairs that changed | Repeats per run |
+|---|---|---|
+| 0.2 | 10 of 60 | 2, 1, 1 |
+| 0 | 0 of 60 | 0, 0, 0 |
+
+At 0.2, six of the changes were overlap vs. different (no effect on the playlist) and
+four were repeat vs. overlap, each a repeat in only one of three runs (Toolformer in
+Lectures 1 and 4, context management in 2 and 6, skills in 6 and 7, structured output
+in 2 and 5), so a rebuild could drop a section one day and keep it the next. At 0 the
+verdicts match the majority of the 0.2 runs, about 73 s per run. `complete_json` and
+`generate_structured` take an optional per-call `temperature`. 1 test extended, 1 new
+assertion (180 tests).
+
 ### Known gaps / next steps
 - The Anthropic provider has not been run against the live API (no credentials
   here); `curio check-claude` checks it with one tiny request.
 - Scores are capped at 100, so with the beginner foundation bonus several top sections
   tie at 100 and the bonus can't separate them (Kubernetes).
-- Scores tied at 100 also fill the half of the playlist reserved for top sections in
-  score order, so a 95 foundation can lose its place to a 100 (Kubernetes Architecture).
+- Sections tied at 100 fill the half reserved for top sections shortest first; a
+  foundation just under 95 can lose its place to them (Kubernetes Architecture, 94.6).
+  Sorting by the uncapped score made that playlist worse, so it was dropped.
 - The knapsack values a section by √minutes below the top sections; whether √ is the
   right curve hasn't been tested with a learner.
-- The lexical redundancy threshold (0.45) wasn't examined in this calibration.
-- Repeat vs overlap verdicts vary run to run.
+- Repeat verdicts are steady now but not checked for being right: at temperature 0
+  CS329Z has no repeats, though Lectures 2 and 6 both teach context management.
 - The made-up-names check covers names, not plain-word claims or numbers.

@@ -30,12 +30,14 @@ class LLMProvider(Protocol):
         schema: dict,
         max_tokens: int,
         shared_prefix: str = "",
+        temperature: float | None = None,
     ) -> str:
         """Return raw JSON text conforming (ideally) to `schema`.
 
         `shared_prefix` is content repeated across several calls (for example the
         video outline). Providers that support prompt caching cache it; others
-        prepend it to `user`.
+        prepend it to `user`. `temperature` overrides the provider's default for
+        this call, where the provider can set one.
         """
         ...
 
@@ -67,6 +69,7 @@ def generate_structured[T: BaseModel](
     shared_prefix: str = "",
     retries: int = 2,
     task: str = "",
+    temperature: float | None = None,
 ) -> T:
     """Call the provider and validate the output against `model_cls`.
 
@@ -87,6 +90,7 @@ def generate_structured[T: BaseModel](
                 schema=schema,
                 max_tokens=max_tokens,
                 shared_prefix=shared_prefix,
+                **({"temperature": temperature} if temperature is not None else {}),
             )
         except TransientLLMError as exc:
             last_error = str(exc)

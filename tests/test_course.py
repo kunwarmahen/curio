@@ -101,6 +101,7 @@ def test_course_plan_skips_repeats_and_cites_real_sections(service):
     assert plan.analysis_ids == [lec.analysis_id for lec in course.lectures]
     # The fake judges the closest pair a repeat: only one half is in the playlist.
     assert len(plan.repeats) == 1
+    assert service.llm.temperatures["OverlapOut"] == 0.0  # repeat verdicts stay put between builds
     rep = plan.repeats[0]
     chosen = {(p.video_id, sid) for p in plan.parts for sid in p.section_ids}
     assert (rep.covered_by.video_id, rep.covered_by.section_id) in chosen

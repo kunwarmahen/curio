@@ -40,7 +40,15 @@ class OllamaProvider:
         return self._max_ctx
 
     def complete_json(
-        self, *, model: str, system: str, user: str, schema: dict, max_tokens: int, shared_prefix: str = ""
+        self,
+        *,
+        model: str,
+        system: str,
+        user: str,
+        schema: dict,
+        max_tokens: int,
+        shared_prefix: str = "",
+        temperature: float | None = None,
     ) -> str:
         import ollama
 
@@ -50,7 +58,11 @@ class OllamaProvider:
             model=model,
             messages=[{"role": "system", "content": system}, {"role": "user", "content": content}],
             format=schema,
-            options={"num_ctx": num_ctx, "temperature": self._temperature, "num_predict": max_tokens},
+            options={
+                "num_ctx": num_ctx,
+                "temperature": self._temperature if temperature is None else temperature,
+                "num_predict": max_tokens,
+            },
             keep_alive="10m",
         )
         if self._think_supported.get(model, True):

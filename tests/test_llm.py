@@ -165,6 +165,9 @@ def test_ollama_request_shape_and_fixed_context():
     assert client.kwargs["options"]["num_ctx"] == 32768
     p.complete_json(model="qwen", system="s", user="tiny", schema={}, max_tokens=100)
     assert client.kwargs["options"]["num_ctx"] == 32768  # same size: no model reload
+    assert client.kwargs["options"]["temperature"] == 0.2
+    generate_structured(p, Answer, model="qwen", system="s", user="tiny", max_tokens=100, temperature=0.0)
+    assert client.kwargs["options"]["temperature"] == 0.0  # a per-call override
 
 
 def test_ollama_detects_silent_truncation():

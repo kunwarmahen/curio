@@ -32,13 +32,15 @@ class FakeLLM:
         self.prompts: list[str] = []
         self.invalid_first = invalid_first
         self.kinds = kinds or {}
+        self.temperatures: dict[str, float | None] = {}
 
     def schema_for(self, model_cls: type[BaseModel]) -> dict:
         return {"_model": model_cls.__name__}
 
-    def complete_json(self, *, model, system, user, schema, max_tokens, shared_prefix=""):
+    def complete_json(self, *, model, system, user, schema, max_tokens, shared_prefix="", temperature=None):
         name = schema["_model"]
         self.calls.append(name)
+        self.temperatures[name] = temperature
         self.prompts.append(f"{shared_prefix}\n\n{user}")
         if self.invalid_first > 0:
             self.invalid_first -= 1

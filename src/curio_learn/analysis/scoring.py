@@ -48,7 +48,11 @@ class ScoringConfig:
     threshold_recommended: float = 55.0
     threshold_optional: float = 40.0
     short_section_s: float = 60.0
-    lexical_redundancy_threshold: float = 0.45
+    # Wording overlap (TF-IDF cosine) that counts as a repeat. Over 19 calibration videos
+    # only one pair reached 0.45, two different Kubernetes demos sharing YAML words; the
+    # 0.30-0.45 band is neighbouring sections on related topics. Real repeats are caught
+    # by the model's `redundant_with`; this stays for near-verbatim ones.
+    lexical_redundancy_threshold: float = 0.55
     # Content the AI rated at least this well (0-100) is never labeled "skip" just
     # because it ranks low within this video; it stays optional.
     content_floor_rating: float = 50.0
