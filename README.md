@@ -222,7 +222,9 @@ curriculum**.
 
 - **Whole lectures** (the default): each lecture or video plays through. A video that
   a course needs goes just before the first lecture that needs it (Karpathy's LLM
-  talk before "LLMs for Agent Builders"); each course keeps its own lecture order;
+  talk before CS329Z's first lecture, 3Blue1Brown's neural networks before "LLMs for
+  Agent Builders"). Curio matches what a lecture needs to what a video teaches by
+  meaning, not just words ("LLMs" and "large language models" are the same thing); each course keeps its own lecture order;
   anything nothing needs stays where you put it. **Why this order** on the
   curriculum's page says what moved and why.
 - **Section by section**: sections from different lectures interleave when one needs

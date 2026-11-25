@@ -646,16 +646,30 @@ so one analyzed for another goal isn't queued again).
   suggested. "Build AI agents" on the calibration library: CS329Z, Karpathy's LLM talk
   and 3Blue1Brown's neural networks in, algorithms, the brain lecture and the sleep
   podcast out, each with a reason (24 s cold, 6 s warm).
-- **Needs** (no model calls): a section's `prerequisites` phrase not taught earlier
+- **Needs** (no model calls but embeddings): a section's `prerequisites` phrase not taught earlier
   in its own video, nor by an earlier lecture of its own course, is an outside need;
   sources of *other* courses teach it when one of their concepts (`introduces_concepts`,
   `key_concepts`) covers it: the concept holds every content word of the need ("Neural
   network as a function" covers "basic neural network concepts"), or the need holds a
   concept of two or more words, sharing a word that isn't broad ("model", "agent",
   "system"). Filler ("basic", "understanding of") is dropped; words are roughly singular.
-- **Whole lectures** (`source_edges`, `order_sources`): A goes before B when A teaches
-  B's needs with weight ≥ 1.5 (each need counts 1 split among the sources that teach
-  it) and at least twice what B teaches of A's. A course's lectures always keep its
+  A run of 2–4 words whose initials the library writes in capitals somewhere
+  (`library_acronyms`: "LLM", "RAG", "SFT") reads as that acronym, so "Basic knowledge
+  of LLMs" matches "Large Language Models". A need also matches a concept close in
+  meaning: cosine ≥ 0.8 of `nomic-embed-text` vectors (`SemanticMatcher`). On CS329Z's
+  212 prerequisites × 1,158 concepts, 0.8 and up were right ("Understanding of agent
+  architectures" ~ "Agent Architecture", missed by words because both words are
+  broad), 0.75–0.8 mixed ("Policy Gradient methods" ~ "Feedback gradients"), and the
+  "LLM" probe never got past 0.72, hence the acronyms. Vectors are saved per phrase
+  (`phrase_vectors`, float32, keyed by model and hash): the first CS329Z curriculum
+  embedded ~1,400 phrases in 7.5 s, later orderings take ~2 s (pure-Python cosine).
+  Without an embedder, or when it fails, words alone; page reads never embed.
+- **Whole lectures** (`source_edges`, `order_sources`): A goes before the first
+  lecture of a course (or a lone video) that needs it when A teaches that course's
+  needs with weight ≥ 1.5, summed over its lectures (each distinct need of a lecture
+  counts 1, split among the sources that teach it; one lecture's five "Basic Python"s
+  count once), and at least twice what the course teaches of A's. Per lecture,
+  3Blue1Brown (one need each of lectures 2 and 5) never moved. A course's lectures always keep its
   order; edges closing a cycle are dropped, weakest first. The order is the given one
   with each source's predecessors pulled in just before it, so an unneeded video keeps
   its place (picking the lowest-ranked ready source let the sleep podcast jump to

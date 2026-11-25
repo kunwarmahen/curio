@@ -14,7 +14,14 @@ from pydantic import BaseModel
 from curio_learn.analysis.ask import answer_question
 from curio_learn.analysis.course import Lecture, build_course_plan, custom_course_parts
 from curio_learn.analysis.course_ask import LectureText, answer_course_question, course_passages
-from curio_learn.analysis.curriculum import Source, order_sources, source_edges, suggest_sources
+from curio_learn.analysis.curriculum import (
+    SemanticMatcher,
+    Source,
+    order_sources,
+    phrases,
+    source_edges,
+    suggest_sources,
+)
 from curio_learn.analysis.notes import generate_notes, scope_key, scope_sections, to_markdown
 from curio_learn.analysis.pipeline import AnalysisPipeline
 from curio_learn.analysis.playlist import _RANK, PlaylistConfig, fit_labels
@@ -1104,6 +1111,42 @@ class CurioService:
         self.order_curriculum(course_id)
         return course_id
 
+    def _phrase_matcher(self, sources: list[Source], *, embed: bool = True) -> SemanticMatcher | None:
+        """Prerequisites and concepts close in meaning, from embeddings of every phrase of
+        the sources (saved per phrase; only new ones are embedded, unless `embed` is off,
+        as on reads). None without an embedder or when it fails: words alone then."""
+        emb = self.embedder
+        if emb is None or not sources:
+            return None
+        texts = phrases(sources)
+        key = {t: hashlib.sha256(t.encode()).hexdigest()[:32] for t in texts}
+        try:
+            saved = self.repo.phrase_vectors(emb.name, list(key.values()))
+            todo = [t for t in texts if key[t] not in saved]
+            if todo and embed:
+                new = emb.embed(todo, kind="query")
+                fresh = {key[t]: v for t, v in zip(todo, new, strict=True)}
+                self.repo.save_phrase_vectors(emb.name, fresh)
+                saved.update(fresh)
+        except Exception as exc:  # embeddings are an optional improvement
+            log.warning("Phrase embeddings unavailable for the curriculum (%s); using words only", exc)
+            return None
+        return SemanticMatcher({t: saved[key[t]] for t in texts if key[t] in saved})
+
+    def _lecture_sources(self, course_id: str, lectures: list) -> list[Source]:
+        """Curriculum sources for `Lecture`s (analysis loaded), with their course groups."""
+        cur = self.repo.get_curriculum(course_id)
+        groups = cur["groups"] if cur else {}
+        return [
+            Source(
+                key=lec.analysis.video.video_id,
+                analysis=lec.analysis,
+                rank=lec.position,
+                group=groups.get(lec.analysis.video.video_id, ""),
+            )
+            for lec in lectures
+        ]
+
     def curriculum_missing(self, course_id: str) -> list[str]:
         """Video ids of a course's lectures that have no analysis at all, nor one waiting."""
         data = self.repo.get_course(course_id)
@@ -1146,7 +1189,7 @@ class CurioService:
                 sources.append(
                     Source(key=lec.video_id, analysis=analysis, rank=i, group=cur["groups"].get(lec.video_id, ""))
                 )
-        keys, kept = order_sources(sources, source_edges(sources))
+        keys, kept = order_sources(sources, source_edges(sources, similar=self._phrase_matcher(sources)))
         order = list(keys)
         for i, lec in enumerate(lectures):  # lectures without an analysis: after their old neighbour
             if lec.video_id in order:
@@ -1180,13 +1223,21 @@ class CurioService:
         analysis the course no longer uses are left out."""
         refs = {tuple(x.split(":", 1)) for x in picked if ":" in x}
         cur = self.repo.get_curriculum(plan.course_id)
+        lecs = self._course_lectures(lectures)
+        by_section = plan.order == "sections"
+        similar = (
+            self._phrase_matcher(self._lecture_sources(plan.course_id, lecs), embed=False)
+            if cur and by_section
+            else None
+        )
         return custom_course_parts(
-            self._course_lectures(lectures),
+            lecs,
             refs,
             plan.pairs,
             PlaylistConfig(merge_gap_s=self.settings.merge_gap_s),
             groups=cur["groups"] if cur else None,
-            by_section=plan.order == "sections",  # as the plan on screen; "Build again" applies a change
+            by_section=by_section,  # as the plan on screen; "Build again" applies a change
+            similar=similar,
         )
 
     def course_playlist_sections(self, course_id: str) -> list[CourseSectionChoice]:
@@ -1409,6 +1460,7 @@ class CurioService:
                 watched=watched,
                 groups=cur["groups"] if cur else None,
                 by_section=bool(cur and cur["order"] == "sections"),
+                similar=self._phrase_matcher(self._lecture_sources(pending.course_id, lectures)) if cur else None,
             )
             plan.created_at = pending.created_at
             self.repo.save_course_plan(plan)

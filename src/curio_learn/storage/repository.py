@@ -39,6 +39,7 @@ from curio_learn.storage.orm import (
     CustomPlaylistRow,
     EmbeddingRow,
     NotesRow,
+    PhraseVectorRow,
     QuestionRow,
     QuizAttemptRow,
     SegmentRow,
@@ -742,6 +743,29 @@ class Repository:
             db.merge(SettingRow(key=key, value=value))
 
     # -------------------------------------------------------------- embeddings
+
+    def phrase_vectors(self, model: str, keys: list[str]) -> dict[str, list[float]]:
+        """Saved phrase vectors by key (missing keys are left out)."""
+        import array
+
+        out: dict[str, list[float]] = {}
+        with self.session() as db:
+            for i in range(0, len(keys), 500):
+                rows = db.scalars(
+                    select(PhraseVectorRow).where(
+                        PhraseVectorRow.model == model, PhraseVectorRow.key.in_(keys[i : i + 500])
+                    )
+                )
+                for r in rows:
+                    out[r.key] = array.array("f", r.vector).tolist()
+        return out
+
+    def save_phrase_vectors(self, model: str, vectors: dict[str, list[float]]) -> None:
+        import array
+
+        with self.session() as db, db.begin():
+            for k, v in vectors.items():
+                db.merge(PhraseVectorRow(model=model, key=k, vector=array.array("f", v).tobytes()))
 
     def get_embeddings(self, video_id: str, model: str, blocks_key: str) -> list[list[float]] | None:
         with self.session() as db:

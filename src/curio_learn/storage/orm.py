@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, LargeBinary, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -111,6 +111,17 @@ class QuestionRow(Base):
     question: Mapped[str] = mapped_column(Text)
     answer_json: Mapped[dict] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class PhraseVectorRow(Base):
+    """The embedding of a short phrase (a prerequisite or concept), for curricula: float32
+    bytes, keyed by model and the phrase's hash."""
+
+    __tablename__ = "phrase_vectors"
+
+    model: Mapped[str] = mapped_column(String(100), primary_key=True)
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    vector: Mapped[bytes] = mapped_column(LargeBinary)
 
 
 class EmbeddingRow(Base):

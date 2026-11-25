@@ -219,10 +219,79 @@ def test_your_own_playlist_follows_a_section_by_section_curriculum(service, monk
         order="sections",
     )
     # Stand in for a real reorder: the curriculum's section order reversed.
-    monkeypatch.setattr(course_mod, "order_sections", lambda placed, sources, order: [p.key for p in placed][::-1])
+    monkeypatch.setattr(
+        course_mod, "order_sections", lambda placed, sources, order, similar=None: [p.key for p in placed][::-1]
+    )
     plan = service.course_plan(cid, minutes=10)
     assert plan.order == "sections"
     mine = [f"{p.analysis_id}:{sid}" for p in plan.parts for sid in p.section_ids]
     course = service.set_course_playlist(cid, mine[:-1])  # Curio's picks minus one: the learner's own
     lectures = [p.lecture for p in course.custom_parts]
     assert lectures == sorted(lectures, reverse=True)  # the curriculum's order, not lecture order
+
+
+def test_acronyms_the_library_writes_in_capitals():
+    from curio_learn.analysis.curriculum import library_acronyms
+
+    acr = library_acronyms(["LLM Inference", "Agentic RAGs", "Supervised fine-tuning (SFT)", "Neural networks"])
+    assert acr == {"llm", "rag", "sft"}
+    need = concept_tokens("Basic knowledge of LLMs", acr)
+    assert matches(need, concept_tokens("Large Language Models", acr))
+    assert matches(concept_tokens("Understanding of supervised fine-tuning", acr), concept_tokens("SFT", acr))
+    assert not matches(need, concept_tokens("Large Language Models"))  # without the acronyms
+
+
+def test_needs_close_in_meaning_count_when_words_differ():
+    l1 = src(
+        "l1", 0, [sec(0, needs=["Understanding of agent architectures", "Knowledge of agent architecture patterns"])]
+    )
+    v = src("v", 1, [sec(0, teaches=["Agent Architecture"])])
+    assert outside_needs([l1, v])["l1"] == []  # both words are broad: no word match
+    close = {("Understanding of agent architectures", "Agent Architecture")}
+    needs = outside_needs([l1, v], similar=lambda p, c: (p, c) in close)["l1"]
+    assert [n.prerequisite for n in needs] == ["Understanding of agent architectures"]
+
+
+def test_semantic_matcher_threshold():
+    from curio_learn.analysis.curriculum import SemanticMatcher
+
+    m = SemanticMatcher({"a": [1, 0], "b": [0.9, 0.1], "c": [0, 1]}, threshold=0.8)
+    assert m("a", "b") and not m("a", "c") and not m("a", "unknown")
+
+
+def test_phrase_vectors_are_saved_and_reused(service):
+    class Emb:
+        name = "fake/emb"
+        calls = 0
+
+        def embed(self, texts, *, kind):
+            Emb.calls += 1
+            return [[1.0, float(len(t) % 3)] for t in texts]
+
+    course_id, a, b, c = _library(service)
+    service._embedder = Emb()
+    lecs = service._course_lectures(service.course(course_id).lectures)
+    sources = service._lecture_sources(course_id, lecs)
+    assert service._phrase_matcher(sources) is not None and Emb.calls == 1
+    assert service._phrase_matcher(sources) is not None and Emb.calls == 1  # all saved now
+
+    class Broken(Emb):
+        def embed(self, texts, *, kind):
+            raise RuntimeError("Ollama is down")
+
+    service._embedder = Broken()
+    service.repo.save_phrase_vectors("fake/emb", {})  # nothing new saved under the broken one's name
+    assert service._phrase_matcher(sources) is not None  # same name: everything is cached, no call
+    Broken.name = "other/emb"
+    assert service._phrase_matcher(sources) is None  # words only
+
+
+def test_a_video_is_weighed_against_the_whole_course_and_repeats_count_once():
+    # Lectures 2 and 3 each need one thing the video teaches: together enough to move it.
+    l1 = src("l1", 0, [sec(0)], group="c")
+    l2 = src("l2", 1, [sec(0, needs=["Neural networks"])], group="c")
+    l3 = src("l3", 2, [sec(0, needs=["Neural network weights", "Neural network weights"])], group="c")
+    nn = src("nn", 3, [sec(0, teaches=["Neural networks", "Neural network weights"])])
+    edges = source_edges([l1, l2, l3, nn])
+    assert [(e.before, e.after, e.weight) for e in edges] == [("nn", "l2", 2.0)]  # l3's repeat counts once
+    assert order_sources([l1, l2, l3, nn], edges)[0] == ["l1", "nn", "l2", "l3"]

@@ -767,10 +767,28 @@ lectures or section by section, your choice; watched anywhere counts as covered)
   on screen was built that way (it played in lecture order before).
 - 2 new tests (194 in total).
 
+### Curricula match needs by meaning (2026-11-25)
+- **Acronyms:** a run of words whose initials the library writes in capitals reads as
+  that acronym ("large language models" = "LLM", "supervised fine-tuning" = "SFT").
+  Embeddings didn't fix this: "Basic knowledge of LLMs" never got past 0.72.
+- **Embeddings:** a prerequisite also matches a concept at cosine ≥ 0.8
+  (nomic-embed-text). Calibrated on CS329Z (212 prerequisites × 1,158 concepts): 0.8+
+  right ("Understanding of agent architectures" ~ "Agent Architecture"), 0.75–0.8
+  mixed, below wrong. Phrase vectors are saved (`phrase_vectors`); first ordering
+  7.5 s, then ~2 s. Without an embedder, words alone.
+- **Weighing:** a video is weighed against a whole course (summed over its lectures)
+  and goes before the first lecture that needs it; a lecture's repeated need counts
+  once (DSPy vs. LangGraph listed "Basic Python" five times).
+- Result on CS329Z + Karpathy's LLM talk + 3Blue1Brown (re-analyzed after a reboot
+  cleared the calibration copy; both given last): Karpathy, Lecture 1, 3Blue1Brown,
+  Lectures 2–9, guest lecture. Words only and per lecture, 3Blue1Brown stayed last.
+- Both videos were also analyzed in the live app (CS329Z's goal), and the test library
+  is kept at `data/curio-curriculum-test-2026-11-25.db`.
+- 5 new tests (199 in total).
+
 ### Known gaps / next steps
-- Curricula match needs to concepts by words, not meaning: "LLM" and "large language
-  model" don't match, and a vague prerequisite ("Python basics") can match a talk that
-  only mentions Python. Embeddings (already used for course pairs) could help.
+- A vague one-word prerequisite ("Python basics") still matches a talk that only
+  mentions Python; it now counts once per lecture, but it still counts.
 - Section by section only reorders what the playlist holds: when the section that
   teaches a need doesn't fit the time, nothing moves (seen with Karpathy put last by
   hand in a 3-hour playlist).

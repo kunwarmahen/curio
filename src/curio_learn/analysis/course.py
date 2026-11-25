@@ -27,7 +27,7 @@ from typing import Literal
 from pydantic import BaseModel
 
 from curio_learn.analysis import prompts
-from curio_learn.analysis.curriculum import Placed, Source, order_sections, outside_needs
+from curio_learn.analysis.curriculum import Placed, Similar, Source, order_sections, outside_needs
 from curio_learn.analysis.playlist import BEYOND_BUDGET, PlaylistConfig, _segment, select_sections
 from curio_learn.analysis.profiles import learner_brief
 from curio_learn.analysis.redundancy import similarity_matrix
@@ -422,6 +422,7 @@ def custom_course_parts(
     *,
     groups: dict[str, str] | None = None,
     by_section: bool = False,
+    similar: Similar | None = None,
 ) -> list[CoursePart]:
     """The learner's own course playlist: the sections they picked, as `(analysis id,
     section id)`, made into parts the same way, with related sections from the pairs
@@ -459,7 +460,7 @@ def custom_course_parts(
             for it in items
             if it.key in chosen
         ]
-        sequence = order_sections(placed, sources, [s.key for s in sources])
+        sequence = order_sections(placed, sources, [s.key for s in sources], similar)
     return course_parts(lectures, items, chosen, related, config, sequence=sequence)
 
 
@@ -481,6 +482,7 @@ def build_course_plan(
     watched: set[tuple[str, str]] = frozenset(),
     groups: dict[str, str] | None = None,
     by_section: bool = False,
+    similar: Similar | None = None,
 ) -> CoursePlan:
     """`pinned` and `watched` are (analysis id, section id): pinned sections are always in
     the playlist; watched ones start `WATCHED_PENALTY` points lower."""
@@ -540,7 +542,7 @@ def build_course_plan(
         ]
         key_of = {(it.lecture.analysis.video.video_id, it.section.id): it.key for it in items}
         extra: dict[str, list[str]] = {}
-        for src, needs in outside_needs(sources).items():
+        for src, needs in outside_needs(sources, similar).items():
             for n in needs:
                 mine = key_of.get((src, n.section_id))
                 for other, sid in n.taught_by.items():
@@ -591,7 +593,7 @@ def build_course_plan(
             for it in items
             if it.key in chosen
         ]
-        sequence = order_sections(placed, sources, [s.key for s in sources])
+        sequence = order_sections(placed, sources, [s.key for s in sources], similar)
     parts = course_parts(lectures, items, chosen, related, config, sequence=sequence)
 
     skipped: list[CourseRepeat] = []
