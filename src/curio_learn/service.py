@@ -996,6 +996,8 @@ class CurioService:
             raise AnalysisError("Build the course playlist first, then edit it.")
         curio = {(p.analysis_id, sid) for p in plan.parts for sid in p.section_ids}
         shown = {(p.analysis_id, sid) for p in (course.custom_parts or plan.parts) for sid in p.section_ids}
+        pins = {tuple(x.split(":", 1)) for x in self.repo.course_pins(course_id)}
+        watched = self._watched_sections(course)
         out = []
         for lec in self._course_lectures(course.lectures):
             for s in lec.analysis.sections:
@@ -1012,8 +1014,46 @@ class CurioService:
                         importance=s.importance,
                         curio_pick=key in curio,
                         picked=key in shown,
+                        pinned=key in pins,
+                        watched=key in watched,
                     )
                 )
+        return out
+
+    def set_course_pins(self, course_id: str, sections: list[str]) -> list[str]:
+        """Save the sections to keep in Curio's course playlist whenever it's built, as
+        "analysis id:section id" strings, in course order. They count from the next build."""
+        choices = self.course_playlist_sections(course_id)
+        order = [f"{c.analysis_id}:{c.section_id}" for c in choices]
+        unknown = set(sections) - set(order)
+        if unknown:
+            raise AnalysisError(f"Unknown sections: {', '.join(sorted(unknown))}.")
+        pins = [k for k in order if k in set(sections)]
+        self.repo.set_course_pins(course_id, pins)
+        return pins
+
+    def _watched_sections(self, course: Course) -> set[tuple[str, str]]:
+        """(analysis id, section id) of every section in a part the learner marked
+        watched. A part key is looked up in the playlists on screen (Curio's and the
+        learner's); an older key gives the section playing just after its start."""
+        keys = self.repo.course_watched(course.id)
+        if not keys:
+            return set()
+        out: set[tuple[str, str]] = set()
+        known: set[str] = set()
+        for part in (course.plan.parts if course.plan else []) + (course.custom_parts or []):
+            if part.key in keys:
+                known.add(part.key)
+                out.update((part.analysis_id, sid) for sid in part.section_ids)
+        by_video = {lec.video_id: lec.analysis_id for lec in course.lectures if lec.analysis_id}
+        for key in keys - known:
+            video_id, _, start = key.rpartition("@")
+            aid = by_video.get(video_id)
+            analysis = self.repo.get_analysis(aid) if aid else None
+            if analysis is None or not start.isdigit():
+                continue
+            t = int(start) + 3  # a part starts 2 s before its first section
+            out.update((aid, s.section.id) for s in analysis.sections if s.section.start_s <= t < s.section.end_s)
         return out
 
     def set_course_playlist(self, course_id: str, sections: list[str] | None) -> Course:
@@ -1058,6 +1098,9 @@ class CurioService:
         if not 10 <= minutes <= 1200:
             raise AnalysisError("Choose between 10 minutes and 20 hours.")
         key = f"{','.join(ids)}|{minutes}|{self.course_llm_key()}"
+        pins = self.repo.course_pins(course_id)
+        if pins:  # pinning changes the playlist: build it again
+            key += "|pins:" + hashlib.sha256(",".join(pins).encode()).hexdigest()[:12]
         if not force:
             existing = self.repo.find_course_plan(course_id, key)
             if existing:
@@ -1099,6 +1142,9 @@ class CurioService:
                     )
                 )
             anthropic = self.llm.name == "anthropic"
+            pinned = {tuple(x.split(":", 1)) for x in self.repo.course_pins(pending.course_id)}
+            shown = self.course(pending.course_id)
+            watched = self._watched_sections(shown) if shown else set()
             plan = build_course_plan(
                 self.llm,
                 model=self.settings.model_for("course"),
@@ -1112,9 +1158,16 @@ class CurioService:
                 embedder=self.embedder,
                 retries=self.settings.llm_max_retries,
                 progress=report,
+                pinned=pinned,
+                watched=watched,
             )
             plan.created_at = pending.created_at
             self.repo.save_course_plan(plan)
+            # Watched marks follow the sections: a new part made only of watched sections
+            # is watched too (its key changes when its start moves).
+            for part in plan.parts:
+                if part.section_ids and all((part.analysis_id, sid) in watched for sid in part.section_ids):
+                    self.repo.set_course_watched(pending.course_id, part.key, True)
             return plan
         except CurioError as exc:
             self.repo.update_course_plan_status(plan_id, AnalysisStatus.FAILED, error=exc.message)

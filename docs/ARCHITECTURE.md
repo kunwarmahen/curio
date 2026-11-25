@@ -201,7 +201,8 @@ invent a timestamp: code converts the numbers to the original cue times.
 | `GET`  | `/courses/{id}/practice` | `CoursePractice {sets[{lecture, study}], status, progress, stale, questions, cards}` |
 | `GET`  | `/courses/{id}/watched` / `PUT` | watched course parts (`PUT` body `{part_key, watched}`) |
 | `PUT`  | `/courses/{id}/lectures/order` | `{video_ids}` (every lecture once) → `Course` in the new order; the saved plan is renumbered, not rebuilt |
-| `GET`  | `/courses/{id}/playlist-sections` | `CourseSectionChoice[]`: every section of the lectures the course uses, with `curio_pick` and `picked` (in the playlist shown now); needs a built plan |
+| `GET`  | `/courses/{id}/playlist-sections` | `CourseSectionChoice[]`: every section of the lectures the course uses, with `curio_pick`, `picked` (in the playlist shown now), `pinned` and `watched`; needs a built plan |
+| `PUT`  | `/courses/{id}/pins` | `{sections: ["<analysis id>:<section id>", …]}` → the saved pins in course order (`[]` clears them); they count from the next build |
 | `PUT`  | `/courses/{id}/custom-playlist` | `{sections: ["<analysis id>:<section id>", …]}` → `Course` with `custom_parts`; `null` (or exactly Curio's picks) goes back to Curio's |
 | `POST` | `/queue/preferences` | `{preferences, analysis_ids?, save_default?}` → `{updated[], already_analyzed[]}`: give queued videos a goal (all queued when no ids); a video already analyzed with that goal leaves the queue |
 
@@ -602,6 +603,23 @@ its watched state. Sections of an analysis the course no longer uses drop out. T
 course quiz and flashcards cover the learner's playlist when there is one (it goes stale
 when they edit it). The course map and playlist switch between "Yours" and "Curio's
 picks"; a skip section the learner added is drawn as optional.
+
+**Pins.** Sections the learner pins (`course_pins`, `<analysis id>:<section id>`) are
+always in Curio's course playlist: `build_course_plan(pinned=…)` keeps them as items
+even when marked skip (relabeled optional for the selector), and
+`select_sections(required=…)` takes them first, whatever they cost, before the top
+sections and the knapsack, which share the time left. A section a pin repeats is left
+out; two pins that repeat each other both stay. Pins longer than the playlist all go in
+and nothing else does, with a warning. Pins are part of the plan key, so changing them
+makes the next build a real one.
+
+**Unwatched first.** When a plan is built, the sections in parts the learner marked
+watched (`_watched_sections`: a part key is looked up in the playlists on screen; an
+older key gives the section playing just after its start) start `WATCHED_PENALTY`
+(15) points lower, like a repeat's weaker half, so new material wins near ties and a
+strong watched section can still stay. After the build, a new part made only of
+watched sections is marked watched, so marks survive a part's start moving. Watched
+marks aren't part of the plan key: a rebuild without `force` still reuses the plan.
 
 **Learning paths.** `combine_courses` makes a course from several courses' lectures in
 order; everything above then works across courses.

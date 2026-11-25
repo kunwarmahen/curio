@@ -246,6 +246,17 @@ class CustomPlaylistRow(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
 
 
+class CoursePinsRow(Base):
+    """Sections the learner pinned: kept in Curio's course playlist whenever it's built,
+    as "analysis id:section id"."""
+
+    __tablename__ = "course_pins"
+
+    course_id: Mapped[str] = mapped_column(ForeignKey("courses.id", ondelete="CASCADE"), primary_key=True)
+    sections: Mapped[list] = mapped_column(JSON)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
 class CourseCustomPlaylistRow(Base):
     """The learner's own course playlist: sections they chose, as "analysis id:section id"."""
 

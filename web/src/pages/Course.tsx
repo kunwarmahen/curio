@@ -900,6 +900,8 @@ function CoursePlaylistEditor(props: {
   const { course, label, showing } = props
   const [choices, setChoices] = useState<CourseSectionChoice[] | null>(null)
   const [picked, setPicked] = useState<Set<string>>(new Set())
+  const [pins, setPins] = useState<Set<string>>(new Set())
+  const [pinsChanged, setPinsChanged] = useState(false)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
 
@@ -909,6 +911,7 @@ function CoursePlaylistEditor(props: {
         setChoices(cs)
         // Start from the playlist on screen: Curio's picks when that is what's showing.
         setPicked(new Set(cs.filter((c) => (showing === 'curio' ? c.curio_pick : c.picked)).map(choiceKey)))
+        setPins(new Set(cs.filter((c) => c.pinned).map(choiceKey)))
       },
       (e) => setErr(e instanceof ApiError ? e.message : 'Could not load the sections.'),
     )
@@ -924,6 +927,19 @@ function CoursePlaylistEditor(props: {
       setErr(e instanceof ApiError ? e.message : 'Could not save the playlist.')
     } finally {
       setBusy(false)
+    }
+  }
+
+  const pin = async (key: string, on: boolean) => {
+    const next = new Set(pins)
+    if (on) next.add(key)
+    else next.delete(key)
+    setErr('')
+    try {
+      setPins(new Set(await api.setCoursePins(course.id, [...next])))
+      setPinsChanged(true)
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : 'Could not save the pin.')
     }
   }
 
@@ -954,8 +970,14 @@ function CoursePlaylistEditor(props: {
     <div className="editor">
       <p className="hint">
         Tick the sections you want to watch, from any lecture. Curio's picks are marked; sections next to each other
-        play as one part.
+        play as one part. <strong>Pin</strong> a section to keep it in Curio's picks whenever the playlist is built
+        again; when it's rebuilt, Curio also prefers sections you haven't watched.
       </p>
+      {pinsChanged && (
+        <p className="hint" role="status">
+          Pins count from the next build: use <strong>Build again</strong> to apply them.
+        </p>
+      )}
       <div className="editor__groups">
         {groups.map((g) => (
           <div key={g.lecture} className="editor__group">
@@ -965,7 +987,7 @@ function CoursePlaylistEditor(props: {
             </h3>
             <ul className="editor__list">
               {g.items.map((c) => (
-                <li key={choiceKey(c)}>
+                <li key={choiceKey(c)} className="editor__item">
                   <label className="editor__row">
                     <input
                       type="checkbox"
@@ -979,9 +1001,19 @@ function CoursePlaylistEditor(props: {
                         {' '}
                         {duration(c.duration_s)}
                         {c.curio_pick ? ", Curio's pick" : c.importance === 'skip' ? ', marked skip' : ''}
+                        {c.watched ? ', watched' : ''}
                       </span>
                     </span>
                   </label>
+                  <button
+                    type="button"
+                    className={`button-quiet editor__pin${pins.has(choiceKey(c)) ? ' is-pinned' : ''}`}
+                    aria-pressed={pins.has(choiceKey(c))}
+                    aria-label={`${pins.has(choiceKey(c)) ? 'Unpin' : 'Pin'} ${c.title}`}
+                    onClick={() => pin(choiceKey(c), !pins.has(choiceKey(c)))}
+                  >
+                    {pins.has(choiceKey(c)) ? 'Pinned' : 'Pin'}
+                  </button>
                 </li>
               ))}
             </ul>

@@ -422,6 +422,8 @@ export interface CourseSectionChoice {
   importance: Importance
   curio_pick: boolean
   picked: boolean
+  pinned: boolean // kept in Curio's picks whenever the playlist is built
+  watched: boolean // in a part marked watched
 }
 
 export class ApiError extends Error {
@@ -568,6 +570,11 @@ export const api = {
     request<CourseSectionChoice[]>(`/courses/${encodeURIComponent(id)}/playlist-sections`),
   setCoursePlaylist: (id: string, sections: string[] | null) =>
     request<Course>(`/courses/${encodeURIComponent(id)}/custom-playlist`, {
+      method: 'PUT',
+      body: JSON.stringify({ sections }),
+    }),
+  setCoursePins: (id: string, sections: string[]) =>
+    request<string[]>(`/courses/${encodeURIComponent(id)}/pins`, {
       method: 'PUT',
       body: JSON.stringify({ sections }),
     }),

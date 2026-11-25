@@ -602,6 +602,8 @@ class CourseSectionChoice(BaseModel):
     importance: Importance
     curio_pick: bool = False  # in the course playlist Curio built
     picked: bool = False  # in the playlist shown now (the learner's, or else Curio's)
+    pinned: bool = False  # kept in Curio's picks whenever the playlist is built
+    watched: bool = False  # in a part the learner marked watched
 
     @computed_field
     @property

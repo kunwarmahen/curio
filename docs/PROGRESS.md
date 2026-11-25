@@ -12,7 +12,7 @@
 | LAN access | ✅ app and Podman container listen on all interfaces by default |
 | Phase 3: Interactive learning | ✅ Ask the Video, quizzes and flashcards with spaced repetition, a remembered default goal, segment completion tracking, and saved custom playlists |
 | Overnight queue | ✅ queue videos any time; analyzed 1–7 AM while the GPU is idle; a paused analysis resumes after its last finished step |
-| Phase 4: Multi-video intelligence | 🟡 learning paths across courses, courses from YouTube playlists, one course playlist across lectures without repeats (every verdict shown) that you can edit and reorder, an "easy to miss" checklist, Ask the course, and a course quiz and flashcards; curricula across courses are not built |
+| Phase 4: Multi-video intelligence | 🟡 learning paths across courses, courses from YouTube playlists, one course playlist across lectures without repeats (every verdict shown) that you can edit, pin and reorder (rebuilds prefer what you haven't watched), an "easy to miss" checklist, Ask the course, and a course quiz and flashcards; curricula across courses are not built (draft plan below) |
 
 ## Phase 1 log (2026-11-23)
 
@@ -706,6 +706,46 @@ definitions, 12 takeaways, 33 answer parts):
   content and add about a minute per notes or quiz, and the prompts already forbid
   outside facts.
 - 2 test assertions added (180 tests).
+
+### Pinned sections and unwatched first in course playlists (2026-11-25)
+- **Pins.** In the course playlist editor, **Pin** keeps a section in Curio's picks
+  every time the playlist is built (`course_pins`, `PUT /courses/{id}/pins`). The
+  selector takes pins first, whatever they cost, and leaves out what they repeat; top
+  sections and the knapsack share the time left. A pinned skip section is allowed;
+  pins longer than the playlist all go in, with a warning. Pins change the plan key,
+  so the next build is a real one.
+- **Unwatched first.** On a build, sections in parts marked watched start 15 points
+  lower (as a repeat's weaker half does), and a new part made only of watched sections
+  keeps the watched mark, so marks no longer get lost when a part's start moves.
+- **A selector fix found on the way:** since top sections were reserved first, the
+  prerequisite step compared the whole playlist with the time left after the
+  reservation, so prerequisites rarely fit. It uses the whole playlist's time again.
+  No video playlist changes (19 saved analyses); CS329Z at 3 hours gains
+  "Fundamentals of Agent Evaluation" (67 sections, 194 min). A negative time left
+  (pins past the budget) no longer breaks the table.
+- Checked in a browser on a copy of the live database (1280 and 390 px): 276 pin
+  buttons, pinning saves and shows "Pinned" with a note to build again; no page errors,
+  no sideways scroll. 3 new tests (183 in total).
+
+### Plan: curricula across courses (draft, 2026-11-25)
+Already built: courses (one playlist across a playlist's lectures, repeats left out),
+learning paths (courses joined in the order the learner picks), pins, unwatched first.
+A curriculum adds, for one goal ("build agents"):
+1. **Sources from the whole library**: courses and single videos, chosen by the learner
+   or suggested by Curio from what's analyzed (matching the goal against overviews and
+   key concepts).
+2. **Order by what builds on what**: section `builds_on`, `prerequisites` and
+   `introduces_concepts` matched across videos give a dependency graph; a topological
+   order, with course order as the tie-break, replaces "the order you picked".
+3. **Skip what you've covered**: watched parts of any video or course count, not only
+   this course's, plus repeats across sources (the course pair check, run across all
+   sources).
+4. **One playlist**: the course selector (pins, unwatched first, repeats) over all
+   sources, played in the curriculum's order.
+Open decisions: who picks the sources (learner, Curio, or Curio suggests and the
+learner confirms); whether Curio may reorder lectures within a course or only order
+whole courses and videos; whether "covered" includes videos analyzed but not watched;
+finding new YouTube videos for gaps is out of scope for a first version.
 
 ### Known gaps / next steps
 - The Anthropic provider has not been run against the live API (no credentials

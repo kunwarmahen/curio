@@ -60,6 +60,9 @@ NOT_WATCHABLE = {SectionKind.INTRO, SectionKind.OUTRO, SectionKind.META, Section
 MIN_OPTIONAL_S = 120.0
 # A repeat's weaker half starts this many points lower, so the stronger half is tried first.
 REPEAT_PENALTY = 15.0
+# A section the learner has watched starts this many points lower when the playlist is
+# built again, so new material is preferred; a strong one can still win.
+WATCHED_PENALTY = 15.0
 PAIRS_PER_CALL = 12
 # Repeat verdicts are asked at temperature 0. At 0.2, three runs over CS329Z's 60 pairs
 # disagreed on 10; every "repeat" was a one-in-three call, so a rebuild could drop a
@@ -148,14 +151,19 @@ class Pair:
         return self.b if self.keep == "A" else self.a
 
 
-def course_items(lectures: Sequence[Lecture]) -> list[Item]:
+def course_items(lectures: Sequence[Lecture], keep: set[tuple[str, str]] = frozenset()) -> list[Item]:
+    """The sections that can go in the course playlist; `keep` (analysis id, section id)
+    are always included (the learner's pins), even ones marked skip."""
     return [
         Item(f"L{lec.position}.{s.section.id}", lec, s)
         for lec in lectures
         for s in lec.analysis.sections
-        if s.importance != Importance.SKIP
-        and s.section.kind not in NOT_WATCHABLE
-        and not (s.importance == Importance.OPTIONAL and s.section.duration_s < MIN_OPTIONAL_S)
+        if (lec.analysis.id, s.section.id) in keep
+        or (
+            s.importance != Importance.SKIP
+            and s.section.kind not in NOT_WATCHABLE
+            and not (s.importance == Importance.OPTIONAL and s.section.duration_s < MIN_OPTIONAL_S)
+        )
     ]
 
 
@@ -312,7 +320,7 @@ def write_checklist(
     return points, dropped
 
 
-def _for_course(item: Item, *, penalty: float = 0.0) -> ScoredSection:
+def _for_course(item: Item, *, penalty: float = 0.0, pinned: bool = False) -> ScoredSection:
     """A copy of the section keyed for the whole course, for the selector."""
     s = item.scored
     prefix = f"L{item.lecture.position}."
@@ -322,6 +330,8 @@ def _for_course(item: Item, *, penalty: float = 0.0) -> ScoredSection:
         importance = Importance.ESSENTIAL  # relabeled only for the video's own time budget
     if penalty and importance == Importance.ESSENTIAL:
         importance = Importance.RECOMMENDED
+    if pinned and importance == Importance.SKIP:
+        importance = Importance.OPTIONAL  # the selector never takes a skip
     return s.model_copy(
         update={
             "section": s.section.model_copy(update={"id": item.key}),
@@ -416,11 +426,18 @@ def build_course_plan(
     embedder: Embedder | None = None,
     retries: int = 2,
     progress: Progress = lambda _: None,
+    pinned: set[tuple[str, str]] = frozenset(),
+    watched: set[tuple[str, str]] = frozenset(),
 ) -> CoursePlan:
+    """`pinned` and `watched` are (analysis id, section id): pinned sections are always in
+    the playlist; watched ones start `WATCHED_PENALTY` points lower."""
     started = time.monotonic()
     warnings: list[str] = []
     lectures = sorted(lectures, key=lambda lec: lec.position)
-    items = course_items(lectures)
+    items = course_items(lectures, keep=set(pinned))
+    ref = {it.key: (it.lecture.analysis.id, it.section.id) for it in items}
+    required = {k for k, r in ref.items() if r in pinned}
+    seen = {k for k, r in ref.items() if r in watched and k not in required}
     shared = learner_brief(prefs)
     goals = {lec.analysis.preferences.cache_key() for lec in lectures}
     for lec in lectures:
@@ -446,12 +463,25 @@ def build_course_plan(
     # 4. One selection across the course.
     progress("Picking the best parts across the course")
     weaker = {p.other.key for p in repeats}
-    merged = [_for_course(it, penalty=REPEAT_PENALTY if it.key in weaker else 0.0) for it in items]
+    merged = [
+        _for_course(
+            it,
+            penalty=(REPEAT_PENALTY if it.key in weaker else 0.0) + (WATCHED_PENALTY if it.key in seen else 0.0),
+            pinned=it.key in required,
+        )
+        for it in items
+    ]
     excludes: dict[str, set[str]] = {}
     for p in repeats:
         excludes.setdefault(p.a.key, set()).add(p.b.key)
         excludes.setdefault(p.b.key, set()).add(p.a.key)
-    chosen = select_sections(merged, budget_s, config, excludes=excludes) if merged else set()
+    chosen = select_sections(merged, budget_s, config, excludes=excludes, required=required) if merged else set()
+    pinned_s = sum(it.section.duration_s for it in items if it.key in required)
+    if pinned_s > budget_s * config.budget_tolerance:
+        warnings.append(
+            f"Your pinned sections take {round(pinned_s / 60)} min, longer than the playlist; "
+            "they're all in it and nothing else is."
+        )
 
     related: dict[str, list[CourseRef]] = {}
     for p in pairs:

@@ -105,6 +105,10 @@ class CoursePlaylistBody(BaseModel):
     sections: list[str] | None = None  # "analysis id:section id"; None: back to Curio's picks
 
 
+class CoursePinsBody(BaseModel):
+    sections: list[str]  # "analysis id:section id"; empty: no pins
+
+
 class LectureOrderBody(BaseModel):
     video_ids: list[str]
 
@@ -476,6 +480,13 @@ def create_app(service: CurioService | None = None) -> FastAPI:
     def put_course_playlist(course_id: str, body: CoursePlaylistBody, request: Request):
         try:
             return svc(request).set_course_playlist(course_id, body.sections)
+        except KeyError:
+            raise HTTPException(404, {"code": "not_found", "message": "Unknown course id"}) from None
+
+    @app.put("/api/v1/courses/{course_id}/pins", response_model=list[str])
+    def put_course_pins(course_id: str, body: CoursePinsBody, request: Request):
+        try:
+            return svc(request).set_course_pins(course_id, body.sections)
         except KeyError:
             raise HTTPException(404, {"code": "not_found", "message": "Unknown course id"}) from None
 

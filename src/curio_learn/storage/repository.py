@@ -30,6 +30,7 @@ from curio_learn.storage.orm import (
     Base,
     CardStateRow,
     CourseCustomPlaylistRow,
+    CoursePinsRow,
     CoursePlanRow,
     CourseQuestionRow,
     CourseRow,
@@ -827,6 +828,7 @@ class Repository:
             db.execute(delete(CourseQuestionRow).where(CourseQuestionRow.course_id == course_id))
             db.execute(delete(CoursePlanRow).where(CoursePlanRow.course_id == course_id))
             db.execute(delete(CourseCustomPlaylistRow).where(CourseCustomPlaylistRow.course_id == course_id))
+            db.execute(delete(CoursePinsRow).where(CoursePinsRow.course_id == course_id))
             return db.execute(delete(CourseRow).where(CourseRow.id == course_id)).rowcount > 0
 
     def analyses_for_videos(self, video_ids: list[str]) -> list[dict]:
@@ -1003,6 +1005,22 @@ class Repository:
         with self.session() as db:
             row = db.get(CourseCustomPlaylistRow, course_id)
             return list(row.sections) if row else None
+
+    def course_pins(self, course_id: str) -> list[str]:
+        with self.session() as db:
+            row = db.get(CoursePinsRow, course_id)
+            return list(row.sections) if row else []
+
+    def set_course_pins(self, course_id: str, sections: list[str]) -> None:
+        with self.session() as db, db.begin():
+            row = db.get(CoursePinsRow, course_id)
+            if not sections:
+                if row is not None:
+                    db.delete(row)
+            elif row is None:
+                db.add(CoursePinsRow(course_id=course_id, sections=sections))
+            else:
+                row.sections = sections
 
     def set_course_custom_playlist(self, course_id: str, sections: list[str] | None) -> None:
         with self.session() as db, db.begin():

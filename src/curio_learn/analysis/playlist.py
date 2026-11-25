@@ -61,9 +61,12 @@ def select_sections(
     config: PlaylistConfig,
     *,
     excludes: dict[str, set[str]] | None = None,
+    required: set[str] | None = None,
 ) -> set[str]:
     """Best sections that fit the budget. `excludes` maps a section to the ones it rules
     out once chosen (a course's repeats: the same material in another lecture).
+    `required` sections (a course's pins) are always chosen, first, even past the
+    budget; a section one of them excludes is not.
 
     A video's playlist is the set with the most total `_pick_value` that fits (a small
     knapsack), then the direct prerequisites of its sections that still fit. Before
@@ -74,17 +77,25 @@ def select_sections(
     With `excludes` (a course's repeats), when the best set holds both halves of a
     repeat, the half worth less is set aside and the set is chosen again, until no
     repeat is left; a course has few repeats, so this ends after a few rounds."""
-    excludes = excludes or {}
+    excludes, required = excludes or {}, required or set()
     banned: set[str] = set()
     by_id = {s.section.id: s for s in scored}
     while True:
-        chosen = _knapsack(scored, budget_s, config, banned=banned, excludes=excludes)
-        clashes = [(a, b) for a in sorted(chosen) for b in sorted(excludes.get(a, ())) if b in chosen and a < b]
+        chosen = _knapsack(scored, budget_s, config, banned=banned, excludes=excludes, required=required)
+        clashes = [
+            (a, b)
+            for a in sorted(chosen)
+            for b in sorted(excludes.get(a, ()))
+            if b in chosen and a < b and not (a in required and b in required)  # both pinned: keep both
+        ]
         if not clashes:
             return chosen
         for a, b in clashes:
             if a not in banned and b not in banned:
-                banned.add(a if _pick_value(by_id[a]) < _pick_value(by_id[b]) else b)
+                if a in required or b in required:
+                    banned.add(b if a in required else a)
+                else:
+                    banned.add(a if _pick_value(by_id[a]) < _pick_value(by_id[b]) else b)
 
 
 def _knapsack(
@@ -94,19 +105,33 @@ def _knapsack(
     *,
     banned: set[str] | None = None,
     excludes: dict[str, set[str]] | None = None,
+    required: set[str] | None = None,
 ) -> set[str]:
-    banned, excludes = banned or set(), excludes or {}
-    items = [s for s in scored if s.importance != Importance.SKIP and s.section.id not in banned]
+    banned, excludes, required = banned or set(), excludes or {}, required or set()
+    items = [
+        s
+        for s in scored
+        if (s.importance != Importance.SKIP or s.section.id in required) and s.section.id not in banned
+    ]
     if not items:
         return set()
-    limit = budget_s * config.budget_tolerance
+    full = limit = budget_s * config.budget_tolerance
     lead = config.lead_in_s + config.tail_s
+    # The learner's pins first, whatever they cost; they come out of the time left.
+    pinned = {s.section.id for s in items if s.section.id in required}
+    limit -= sum(s.section.duration_s + lead for s in items if s.section.id in pinned)
+    items = [
+        s
+        for s in items
+        if s.section.id not in pinned
+        and not any(s.section.id in excludes.get(x, ()) or x in excludes.get(s.section.id, ()) for x in pinned)
+    ]
     # Top sections first, best (then shortest) first, within `top_share` of the playlist.
     # The knapsack alone left out CS329Z's DSPy optimizers section (100, 9.3 minutes of a
     # 180-minute course playlist) for several shorter ones; the share keeps a 10-minute
     # proof out of a 14-minute playlist (MIT 6.006 lecture 1).
-    reserved: set[str] = set()
-    room = limit * config.top_share
+    reserved: set[str] = set(pinned)
+    room = max(0.0, limit) * config.top_share
     for s in sorted(items, key=lambda s: (-s.score.final, s.section.duration_s)):
         need = s.section.duration_s + lead
         if s.score.final < config.top_score:
@@ -117,7 +142,7 @@ def _knapsack(
             continue  # repeats a better top section
         reserved.add(s.section.id)
         room -= need
-    if reserved:
+    if reserved - pinned:
         limit -= sum(s.section.duration_s + lead for s in items if s.section.id in reserved)
         items = [
             s
@@ -137,7 +162,7 @@ def _knapsack(
             if p in score_of and s.score.final > score_of[p]:
                 dependants[p] = dependants.get(p, 0) + 1
     value = [_pick_value(s) * (1 + 0.1 * min(2, dependants.get(s.section.id, 0))) for s in items]
-    cap = int(limit // unit)
+    cap = max(0, int(limit // unit))
     best = [0.0] * (cap + 1)
     take = [[False] * (cap + 1) for _ in items]
     for i, (c, v) in enumerate(zip(cost, value, strict=True)):
@@ -156,7 +181,7 @@ def _knapsack(
 
     # Direct prerequisites of the chosen sections, best sections first, when they fit.
     by_id = {s.section.id: s for s in scored}
-    used = sum(by_id[x].section.duration_s + lead for x in chosen)
+    used = sum(by_id[x].section.duration_s + lead for x in chosen)  # against the whole playlist
     for sid in sorted(chosen, key=lambda x: -by_id[x].score.final):
         for p in by_id[sid].evaluation.builds_on:
             pre = by_id.get(p)
@@ -164,7 +189,7 @@ def _knapsack(
                 continue
             if any(p in excludes.get(x, ()) or x in excludes.get(p, ()) for x in chosen):
                 continue  # a prerequisite that repeats a chosen section
-            if used + pre.section.duration_s + lead <= limit:
+            if used + pre.section.duration_s + lead <= full:
                 chosen.add(p)
                 used += pre.section.duration_s + lead
     return chosen

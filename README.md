@@ -185,6 +185,12 @@ overnight, the playlist is rebuilt by itself.
 - **Edit the playlist** lists every section of every lecture, with Curio's picks
   marked. Tick what you want and save; switch between **Yours** and **Curio's picks**,
   or go back to Curio's. Parts you keep stay marked as watched.
+- **Pin** a section in the editor to keep it in Curio's picks every time the playlist
+  is built; Curio fills the rest of the time around your pins and leaves out
+  sections that repeat them. Pins count from the next **Build again**.
+- **Building again prefers what you haven't watched**: sections in parts you marked
+  watched count for less, so new material comes first (a very strong one can still
+  stay), and your watched marks carry over to the new parts.
 - **Easy to miss**: 8–12 points from the course that matter for your goal, each
   linked to the lecture moment that teaches it.
 - **Quiz and flashcards**: a quiz on every part of the course playlist (yours, if

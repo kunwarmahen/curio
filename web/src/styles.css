@@ -2103,6 +2103,24 @@ button.stretch:hover,
   font-size: var(--t-small);
   cursor: pointer;
 }
+.editor__item {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+.editor__item .editor__row {
+  flex: 1;
+}
+.editor__pin {
+  flex: none;
+  font-size: var(--t-small);
+  padding: 0.15rem 0.5rem;
+}
+.editor__pin.is-pinned {
+  color: var(--ink);
+  background: var(--hl-tint);
+  font-weight: 600;
+}
 .editor__list li + li {
   border-top: 1px solid var(--rule);
 }

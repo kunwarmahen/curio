@@ -407,3 +407,61 @@ def test_api_course_editing(service):
         r = client.put(f"/api/v1/courses/{course_id}/lectures/order", json={"video_ids": [VIDS[1]]})
         assert r.status_code == 400
         assert client.get("/api/v1/courses/nope/playlist-sections").status_code == 404
+
+
+def test_pinned_sections_stay_in_curios_picks(service):
+    course_id, a, b, plan = _course_with_plan(service)
+    choices = service.course_playlist_sections(course_id)
+    left_out = next(c for c in choices if not c.curio_pick)  # a section Curio didn't pick
+    key = f"{left_out.analysis_id}:{left_out.section_id}"
+    assert service.set_course_pins(course_id, [key]) == [key]
+    assert next(
+        c
+        for c in service.course_playlist_sections(course_id)
+        if c.section_id == left_out.section_id and c.analysis_id == left_out.analysis_id
+    ).pinned
+    # Pins change the plan's inputs: building again (without forcing) builds a new one.
+    rebuilt = service.course_plan(course_id, minutes=round(plan.budget_s / 60))
+    assert rebuilt.id != plan.id
+    assert (left_out.analysis_id, left_out.section_id) in {
+        (p.analysis_id, sid) for p in rebuilt.parts for sid in p.section_ids
+    }
+    with pytest.raises(AnalysisError):
+        service.set_course_pins(course_id, ["nope:S01"])
+    assert service.set_course_pins(course_id, []) == []
+
+
+def test_rebuilding_prefers_unwatched_sections_and_keeps_watched_marks(service):
+    course_id, a, b, plan = _course_with_plan(service)
+    first = plan.parts[0]
+    service.set_course_watched(course_id, first.key, True)
+    course = service.course(course_id)
+    watched = service._watched_sections(course)
+    assert watched == {(first.analysis_id, sid) for sid in first.section_ids}
+    assert all(
+        c.watched == ((c.analysis_id, c.section_id) in watched) for c in service.course_playlist_sections(course_id)
+    )
+    # An older key (a part since moved by a second) still finds the section playing after its start.
+    service.set_course_watched(course_id, first.key, False)
+    service.set_course_watched(course_id, f"{first.video_id}@{int(first.start_s) + 1}", True)
+    assert (first.analysis_id, first.section_ids[0]) in service._watched_sections(service.course(course_id))
+    service.set_course_watched(course_id, first.key, True)
+    rebuilt = service.course_plan(course_id, minutes=round(plan.budget_s / 60), force=True)
+    marks = service.course_watched(course_id)
+    for p in rebuilt.parts:
+        if all((p.analysis_id, sid) in watched for sid in p.section_ids):
+            assert p.key in marks  # watched marks follow the sections to the new parts
+
+
+def test_selector_takes_required_sections_first():
+    from .test_playlist import CFG, scored
+
+    secs = [scored(0, 95), scored(1, 90), scored(2, 30, dur=120), scored(3, 85)]
+    # S02 is weak but pinned; S00 repeats it and is left out; the rest fill the time.
+    chosen = select_sections(
+        secs, budget_s=400, config=CFG, excludes={"S00": {"S02"}, "S02": {"S00"}}, required={"S02"}
+    )
+    assert "S02" in chosen and "S00" not in chosen and {"S01", "S03"} <= chosen
+    # Pins longer than the playlist all go in, and nothing else.
+    long = [scored(i, 50, dur=600) for i in range(3)] + [scored(3, 99, dur=60)]
+    assert select_sections(long, budget_s=600, config=CFG, required={"S00", "S01"}) == {"S00", "S01"}
