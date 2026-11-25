@@ -1,8 +1,10 @@
+import time
+
 import pytest
 from fastapi.testclient import TestClient
 
 from curio_learn.analysis.playlist import PlaylistConfig, select_sections
-from curio_learn.api.app import _queue_course_safely, _run_course_plan_safely, create_app
+from curio_learn.api.app import _queue_course_safely, create_app
 from curio_learn.domain import AnalysisStatus, LearningPreferences, LearningProfile, LectureState
 from curio_learn.errors import AnalysisError, InvalidURL
 from curio_learn.ingestion.playlist import (
@@ -149,8 +151,13 @@ def test_api_course_flow(service):
 
         r = client.post(f"/api/v1/courses/{course_id}/plan", json={"minutes": 10})
         assert r.status_code == 202
-        _run_course_plan_safely(service, r.json()["plan_id"])
-        plan = client.get(f"/api/v1/courses/{course_id}").json()["plan"]
+        # The app builds it on its job worker: wait for that build (running it here as
+        # well raced with it, and the worker's run could leave the plan "running").
+        for _ in range(200):
+            plan = client.get(f"/api/v1/courses/{course_id}").json()["plan"]
+            if plan["status"] in ("done", "failed"):
+                break
+            time.sleep(0.05)
         assert plan["status"] == "done" and plan["parts"]
         key = plan["parts"][0]["key"]
         assert (

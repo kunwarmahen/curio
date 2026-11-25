@@ -153,6 +153,20 @@ StudySet        id, analysis_id, scope, segment_ids[], status, progress,
                 start_s)], warnings[]
 QuizAttempt     id, study_id, answers{question id: option}, correct[], score, total
 CardState       study_id, card_id, box (0 = new, 1-6), due_at, reviews, lapses
+Course          id, title, channel, playlist_id, preferences, lectures[CourseLecture
+                (position, label, video_id, title, duration_s, state, analysis_id,
+                pending_id, error)], plan (newest CoursePlan), plan_stale,
+                custom_parts[] (the learner's own playlist), curriculum?
+CoursePlan      id, course_id, status, budget_s, total_s, original_s, analysis_ids[],
+                parts[CoursePart], repeats[CourseRepeat], pairs[CoursePair],
+                checklist[ChecklistItem], order (lectures|sections), warnings[]
+CoursePart      key "<video_id>@<start>", lecture, video_id, analysis_id,
+                section_ids[], title, start_s, end_s, what_you_learn, importance,
+                score, also_in[CourseRef]
+CourseSectionChoice  a section for the playlist editor: curio_pick, picked, pinned,
+                watched
+CurriculumInfo  goal, order (lectures|sections), auto_order, notes[] (why things moved)
+CurriculumCandidate  kind (course|video), id, title, detail, suggested, reason
 ```
 
 All timestamps derive from caption cues. The LLM refers to **block numbers** (outline)

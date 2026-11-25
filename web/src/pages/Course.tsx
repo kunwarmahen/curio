@@ -159,7 +159,7 @@ function CurriculumPanel({ course, onChange }: { course: Course; onChange: () =>
       {built && built !== cur.order && (
         <p className="hint" role="status">
           The playlist below is ordered by {built === 'sections' ? 'section' : 'whole lectures'}: use{' '}
-          <strong>Build again</strong> to apply the new order.
+          <strong>Build again with this length</strong> to apply the new order.
         </p>
       )}
       {cur.auto_order ? (
@@ -1064,7 +1064,7 @@ function CoursePlaylistEditor(props: {
       </p>
       {pinsChanged && (
         <p className="hint" role="status">
-          Pins count from the next build: use <strong>Build again</strong> to apply them.
+          Pins count from the next build: use <strong>Build again with this length</strong> to apply them.
         </p>
       )}
       <div className="editor__groups">

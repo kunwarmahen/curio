@@ -796,6 +796,16 @@ fell behind it. Checked on the live library (13 needs, all right, unchanged orde
 Karpathy, Lecture 1, 3Blue1Brown, Lectures 2–9) and on the test copy (the Python match
 gone, same order). 1 new test (200 in total).
 
+### Docs checked against the app (2026-11-25)
+- The README and two hints on the course page named a **Build again** button; it reads
+  **Build again with this length** (or **Build it again** when lectures were analyzed
+  since). The README now says a new curriculum starts with **Build the course playlist**.
+- ARCHITECTURE §4 lists the course models (Course, CoursePlan, CoursePart,
+  CourseSectionChoice, CurriculumInfo, CurriculumCandidate).
+- `test_api_course_flow` failed now and then: it ran the course plan itself while the
+  app's job worker built the same plan, and the worker's run could leave it "running".
+  It now waits for the worker. 200 tests.
+
 ### Known gaps / next steps
 - Section by section only reorders what the playlist holds: when the section that
   teaches a need doesn't fit the time, nothing moves (seen with Karpathy put last by

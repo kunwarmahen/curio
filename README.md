@@ -187,7 +187,8 @@ overnight, the playlist is rebuilt by itself.
   or go back to Curio's. Parts you keep stay marked as watched.
 - **Pin** a section in the editor to keep it in Curio's picks every time the playlist
   is built; Curio fills the rest of the time around your pins and leaves out
-  sections that repeat them. Pins count from the next **Build again**.
+  sections that repeat them. Pins count from the next build (**Build again with this
+  length**).
 - **Building again prefers what you haven't watched**: sections in parts you marked
   watched count for less, so new material comes first (a very strong one can still
   stay), and your watched marks carry over to the new parts.
@@ -203,7 +204,8 @@ overnight, the playlist is rebuilt by itself.
   whether it judged them a repeat (watch one), an overlap (each adds something) or
   different, with why.
 - **Lectures**: each lecture's state (analyzed, queued, failed…), arrows to put them
-  in your own order, the playlist length, and **Build again**. Reordering changes the
+  in your own order, the playlist length, and **Build again with this length** (**Build
+  it again** when lectures have been analyzed since). Reordering changes the
   playlist straight away; building again also redoes which of two repeated sections
   is kept.
 
@@ -230,7 +232,9 @@ curriculum**.
 - **Section by section**: sections from different lectures interleave when one needs
   what another teaches. Each course still keeps its order.
 
-You can switch the order on the curriculum's page any time (then **Build again**).
+A new curriculum has no playlist yet: press **Build the course playlist** on its page.
+Every build first puts the lectures in order. You can switch the order on the
+curriculum's page any time, then press **Build again with this length**.
 Curio also leaves out what you've **already watched anywhere**, in a video's own
 playlist or any course. Everything a course has works for a curriculum too: the course
 playlist, pins, your own playlist (which follows the section-by-section order too),
