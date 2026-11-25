@@ -698,6 +698,11 @@ assertion (180 tests).
   Sorting by the uncapped score made that playlist worse, so it was dropped.
 - The knapsack values a section by √minutes below the top sections; whether √ is the
   right curve hasn't been tested with a learner.
-- Repeat verdicts are steady now but not checked for being right: at temperature 0
-  CS329Z has no repeats, though Lectures 2 and 6 both teach context management.
+- Repeat verdicts were checked by hand on CS329Z (temperature 0, no repeats): 6 of 7
+  pairs read are right (context management L2/L6, skills L6/L7, structured output
+  L2/L5, MCP L1/L4 and harnesses L5/L6 are real overlaps). Two lean to repeat: a
+  preview of a later lecture (Toolformer L1 → L4; neither in the playlist), and the
+  same worked example making the same point (ReAct on HotpotQA, L1 and L6; both in the
+  playlist, about 2 minutes twice). The prompt was left alone: a stricter rule risks
+  dropping real overlaps.
 - The made-up-names check covers names, not plain-word claims or numbers.

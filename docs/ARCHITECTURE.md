@@ -571,7 +571,10 @@ different, 0 repeats. The pairs judged repeats before (context engineering in Le
 2 and 6, skills in 6 and 7) were judged overlaps this time, each with a specific
 "adds" (KV-cache invalidation; skills vs tools). The line between repeat and overlap
 was a judgment call that varied run to run (until the check moved to temperature 0,
-see step 3); overlapping sections both stay eligible, which is the safer error.
+see step 3); overlapping sections both stay eligible, which is the safer error. A
+hand check of CS329Z's verdicts at temperature 0 found 6 of 7 right; the misses lean
+to repeat (a preview of a later lecture; the same worked example in two lectures) and
+cost about 2 minutes of a 3-hour playlist, so the prompt wasn't made stricter.
 
 **Lecture order.** `reorder_course` stores a new order (every lecture once). A saved plan
 isn't rebuilt: every `lecture` number in it (parts, references, pairs, checklist) and in
