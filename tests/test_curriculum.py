@@ -295,3 +295,17 @@ def test_a_video_is_weighed_against_the_whole_course_and_repeats_count_once():
     edges = source_edges([l1, l2, l3, nn])
     assert [(e.before, e.after, e.weight) for e in edges] == [("nn", "l2", 2.0)]  # l3's repeat counts once
     assert order_sources([l1, l2, l3, nn], edges)[0] == ["l1", "nn", "l2", "l3"]
+
+
+def test_a_one_word_need_is_taught_only_by_that_concept_but_covered_by_any_at_home():
+    assert not matches(concept_tokens("Basic Python"), concept_tokens("Python Interpreter"))
+    assert matches(concept_tokens("Basic Python"), concept_tokens("Python"))
+    assert matches(concept_tokens("Basic Python"), concept_tokens("Python Interpreter"), strict=False)
+    # Taught earlier in its own video by a longer concept: not an outside need.
+    me = src("me", 0, [sec(0, teaches=["Python interpreter"]), sec(1, needs=["Python basics"])])
+    other = src("o", 1, [sec(0, teaches=["Python"])])
+    assert outside_needs([me, other])["me"] == []
+    # Another source's longer concept doesn't teach it.
+    alone = src("a", 0, [sec(0, needs=["Python basics"])])
+    tool = src("t", 1, [sec(0, teaches=["Python Interpreter"])])
+    assert outside_needs([alone, tool])["a"] == []

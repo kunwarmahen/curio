@@ -125,13 +125,21 @@ def phrases(sources: Sequence[Source]) -> list[str]:
     return list(out)
 
 
-def matches(need: frozenset[str], concept: frozenset[str]) -> bool:
+def matches(need: frozenset[str], concept: frozenset[str], *, strict: bool = True) -> bool:
     """A concept covers a need when it holds every content word of the need ("Neural
     network as a function" covers "Basic neural network concepts"), or the need holds the
     whole concept of two or more words; and they share a word that isn't broad. "Vectors"
-    doesn't cover "basic vector search"; "model" alone covers nothing."""
+    doesn't cover "basic vector search"; "model" alone covers nothing. A one-word need
+    is covered by words only by that very concept ("RAG", or "Large Language Models"
+    read as "LLM"): an analysis of Karpathy's talk listed "Python Interpreter", and
+    CS329Z's "Basic Python" prerequisites matched it. Other concepts can still match by
+    meaning. Without `strict` (is it taught earlier in the same video or course?) any
+    concept holding the word will do: Karpathy's "LLM Inference" covers its own "Basic
+    understanding of LLMs"."""
     if not need or not concept:
         return False
+    if strict and len(need) == 1 and need != concept:
+        return False  # "Python basics" isn't taught by "Python Interpreter"
     covered = need <= concept or (len(concept) >= 2 and concept <= need)
     return covered and bool((need & concept) - _BROAD)
 
@@ -193,12 +201,12 @@ def outside_needs(sources: Sequence[Source], similar: Similar | None = None) -> 
                 if not t:
                     continue
 
-                def covers(c: str, ct: frozenset[str], p: str = p, t: frozenset[str] = t) -> bool:
-                    return matches(t, ct) or (similar is not None and similar(p, c))
+                def covers(c: str, ct: frozenset[str], strict: bool = True, p: str = p, t: frozenset[str] = t) -> bool:
+                    return matches(t, ct, strict=strict) or (similar is not None and similar(p, c))
 
-                if any(sid in earlier and covers(c, ct) for sid, c, ct in taught[src.key]):
+                if any(sid in earlier and covers(c, ct, False) for sid, c, ct in taught[src.key]):
                     continue  # taught earlier in this video, or by this very section
-                if any(covers(c, ct) for o in before_me for _, c, ct in taught[o.key]):
+                if any(covers(c, ct, False) for o in before_me for _, c, ct in taught[o.key]):
                     continue  # an earlier lecture of the same course teaches it
                 by = {}
                 for other in sources:

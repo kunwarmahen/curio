@@ -786,9 +786,17 @@ lectures or section by section, your choice; watched anywhere counts as covered)
   is kept at `data/curio-curriculum-test-2026-11-25.db`.
 - 5 new tests (199 in total).
 
+### One-word prerequisites (2026-11-25)
+A one-word need ("Basic Python") is now taught by another source's words only through
+that very concept ("Python"; "Large Language Models" counts as "LLM"), not by a longer
+one that mentions it ("Python Interpreter" in one analysis of Karpathy's talk). Whether
+a video or its course already covers a need stays lenient: made strict there too,
+Karpathy's talk seemed to need CS329Z lecture 1 for "Basic understanding of LLMs" and
+fell behind it. Checked on the live library (13 needs, all right, unchanged order:
+Karpathy, Lecture 1, 3Blue1Brown, Lectures 2–9) and on the test copy (the Python match
+gone, same order). 1 new test (200 in total).
+
 ### Known gaps / next steps
-- A vague one-word prerequisite ("Python basics") still matches a talk that only
-  mentions Python; it now counts once per lecture, but it still counts.
 - Section by section only reorders what the playlist holds: when the section that
   teaches a need doesn't fit the time, nothing moves (seen with Karpathy put last by
   hand in a 3-hour playlist).

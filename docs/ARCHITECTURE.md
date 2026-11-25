@@ -653,7 +653,12 @@ so one analyzed for another goal isn't queued again).
   network as a function" covers "basic neural network concepts"), or the need holds a
   concept of two or more words, sharing a word that isn't broad ("model", "agent",
   "system"). Filler ("basic", "understanding of") is dropped; words are roughly singular.
-  A run of 2–4 words whose initials the library writes in capitals somewhere
+  A one-word need is taught by another source's words only through that very concept
+  ("Python", or "Large Language Models" read as "LLM"): an analysis of Karpathy's talk
+  listed "Python Interpreter", and CS329Z's "Basic Python" prerequisites matched it.
+  Whether a video or its course already covers a need stays lenient (Karpathy's own
+  "LLM Inference" covers its "Basic understanding of LLMs"; strict there, the talk
+  seemed to need CS329Z lecture 1 and dropped behind it). A run of 2–4 words whose initials the library writes in capitals somewhere
   (`library_acronyms`: "LLM", "RAG", "SFT") reads as that acronym, so "Basic knowledge
   of LLMs" matches "Large Language Models". A need also matches a concept close in
   meaning: cosine ≥ 0.8 of `nomic-embed-text` vectors (`SemanticMatcher`). On CS329Z's
