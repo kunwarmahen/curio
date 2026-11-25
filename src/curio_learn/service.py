@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from curio_learn.analysis.ask import answer_question
 from curio_learn.analysis.course import Lecture, build_course_plan, custom_course_parts
 from curio_learn.analysis.course_ask import LectureText, answer_course_question, course_passages
+from curio_learn.analysis.curriculum import Source, order_sources, source_edges, suggest_sources
 from curio_learn.analysis.notes import generate_notes, scope_key, scope_sections, to_markdown
 from curio_learn.analysis.pipeline import AnalysisPipeline
 from curio_learn.analysis.playlist import _RANK, PlaylistConfig, fit_labels
@@ -32,6 +33,9 @@ from curio_learn.domain import (
     CoursePractice,
     CourseSectionChoice,
     CourseStudy,
+    CurriculumCandidate,
+    CurriculumInfo,
+    CurriculumSource,
     DueCard,
     Flashcard,
     FlashcardDeck,
@@ -873,8 +877,12 @@ class CurioService:
         named = [n for n in numbers if n is not None]
         use_numbers = len(named) == len(set(named))
         guests = [i for i, x in enumerate(course["lectures"]) if numbers[i] is None and _GUEST_RE.search(x["title"])]
+        cur = self.repo.get_curriculum(course["id"]) if course.get("id") else None
+        alone = {v for v, g in (cur or {}).get("groups", {}).items() if not g}  # a curriculum's single videos
 
         def label(i: int) -> str:
+            if course["lectures"][i]["video_id"] in alone:
+                return _short(course["lectures"][i]["title"], 40)
             if use_numbers and numbers[i] is not None:
                 return f"Lecture {numbers[i]}"
             if i in guests:
@@ -928,7 +936,8 @@ class CurioService:
             # Lectures may have been reordered since the plan was built: number its
             # references by the current order and play its parts in that order.
             plan = _renumber(plan, {lec.video_id: lec.position for lec in lectures})
-            plan.parts.sort(key=lambda p: p.lecture)  # stable: keeps the order within a lecture
+            if plan.order == "lectures":  # a curriculum section by section keeps its own order
+                plan.parts.sort(key=lambda p: p.lecture)  # stable: keeps the order within a lecture
         stale = plan is not None and plan.status == AnalysisStatus.DONE and set(plan.analysis_ids) != set(usable)
         custom_parts = None
         if custom and plan is not None and plan.status == AnalysisStatus.DONE:
@@ -947,6 +956,7 @@ class CurioService:
             plan=plan,
             plan_stale=stale,
             custom_parts=custom_parts,
+            curriculum=self._curriculum_info(course_id),
             created_at=data["created_at"],
         )
 
@@ -967,7 +977,181 @@ class CurioService:
         if sorted(video_ids) != sorted(by_id) or len(set(video_ids)) != len(video_ids):
             raise AnalysisError("List every lecture of the course once.")
         self.repo.update_course(course_id, lectures=[by_id[v] for v in video_ids])
+        if self.repo.get_curriculum(course_id) is not None:
+            self.repo.save_curriculum(course_id, auto_order=False)  # the learner's order from now on
         return self.course(course_id)
+
+    # ------------------------------------------------------------ curricula
+
+    def _curriculum_info(self, course_id: str) -> CurriculumInfo | None:
+        cur = self.repo.get_curriculum(course_id)
+        if cur is None:
+            return None
+        return CurriculumInfo(goal=cur["goal"], order=cur["order"], auto_order=cur["auto_order"], notes=cur["notes"])
+
+    def curriculum_candidates(self) -> list[CurriculumCandidate]:
+        """Every course (not curricula) and every analyzed video outside them."""
+        out: list[CurriculumCandidate] = []
+        in_courses: set[str] = set()
+        for data in self.repo.list_courses():
+            if self.repo.get_curriculum(data["id"]) is not None:
+                continue
+            in_courses.update(x["video_id"] for x in data["lectures"])
+            n = len(data["lectures"])
+            out.append(
+                CurriculumCandidate(
+                    kind="course", id=data["id"], title=data["title"], detail=f"{n} lecture{'s' if n != 1 else ''}"
+                )
+            )
+        seen: set[str] = set()
+        for r in self.repo.recent(limit=500):
+            v = r.video
+            if v.video_id in in_courses or v.video_id in seen or not r.analysis_id:
+                continue
+            seen.add(v.video_id)
+            minutes = round((v.duration_s or 0) / 60)
+            out.append(
+                CurriculumCandidate(
+                    kind="video",
+                    id=r.analysis_id,
+                    title=v.title,
+                    detail=" · ".join(x for x in (v.channel, f"{minutes} min" if minutes else "") if x),
+                )
+            )
+        return out
+
+    def suggest_curriculum(self, goal: str) -> list[CurriculumCandidate]:
+        """The courses and videos in the library, with the ones Curio suggests for `goal`
+        marked and a reason; the learner confirms before anything is built."""
+        goal = goal.strip()
+        if not goal:
+            raise AnalysisError("Say what you want to learn.")
+        candidates = self.curriculum_candidates()
+        if not candidates:
+            raise AnalysisError("Analyze some videos or add a course first.")
+        about = {}
+        for c in candidates:
+            if c.kind == "course":
+                data = self.repo.get_course(c.id)
+                about[c.id] = "Lectures: " + "; ".join(x["title"] for x in data["lectures"][:20])
+            else:
+                a = self.repo.get_analysis(c.id)
+                concepts = ", ".join(getattr(a, "key_concepts", [])[:10]) if a else ""
+                about[c.id] = f"{(a.overview or '')[:400] if a else ''} Key concepts: {concepts}"
+        return suggest_sources(
+            self.llm,
+            goal=goal,
+            candidates=candidates,
+            about=about,
+            model=self.settings.model_for("course"),
+            retries=self.settings.llm_max_retries,
+        )
+
+    def create_curriculum(
+        self, goal: str, sources: list[CurriculumSource], *, title: str = "", order: str = "lectures"
+    ) -> str:
+        """A curriculum: a course with the lectures of the chosen courses and videos (a
+        video in two comes once, at its first place), ordered by what builds on what."""
+        goal = goal.strip()
+        if not goal:
+            raise AnalysisError("Say what you want to learn.")
+        if order not in ("lectures", "sections"):
+            raise AnalysisError("Order by whole lectures or section by section.")
+        lectures: list[dict] = []
+        groups: dict[str, str] = {}
+        analyses: list[VideoAnalysis] = []
+        for src in sources:
+            if src.kind == "course":
+                data = self.repo.get_course(src.id)
+                if data is None:
+                    raise AnalysisError("A chosen course no longer exists.")
+                new = [dict(x) for x in data["lectures"]]
+                group = src.id
+            else:
+                a = self.repo.get_analysis(src.id)
+                if a is None or a.status != AnalysisStatus.DONE:
+                    raise AnalysisError("Pick videos that have finished analyzing.")
+                analyses.append(a)
+                new = [{"video_id": a.video.video_id, "title": a.video.title, "duration_s": a.video.duration_s}]
+                group = ""
+            for x in new:
+                if x["video_id"] not in groups:
+                    groups[x["video_id"]] = group
+                    lectures.append(x)
+        if len(lectures) < 2:
+            raise AnalysisError("A curriculum needs at least two videos or lectures.")
+        rows = self.repo.analyses_for_videos([x["video_id"] for x in lectures])
+        keys = [r["preferences_key"] for r in rows if r["status"] == AnalysisStatus.DONE]
+        prefs = self.default_preferences()
+        if keys:
+            common = max(keys, key=keys.count)
+            row = next(r for r in rows if r["preferences_key"] == common and r["status"] == AnalysisStatus.DONE)
+            done = self.repo.get_analysis(row["id"])
+            if done is not None:
+                prefs = done.preferences
+        course_id = uuid.uuid4().hex[:12]
+        self.repo.create_course(
+            course_id, title=title.strip() or goal[:80], channel="", playlist_id="", prefs=prefs, lectures=lectures
+        )
+        self.repo.save_curriculum(course_id, goal=goal, order=order, groups=groups, auto_order=True, notes=[])
+        self.order_curriculum(course_id)
+        return course_id
+
+    def set_curriculum(self, course_id: str, *, order: str | None = None, auto_order: bool | None = None) -> Course:
+        """Change how a curriculum is ordered. Turning Curio's order back on reorders the
+        lectures now; the playlist follows the next time it's built."""
+        if self.repo.get_curriculum(course_id) is None:
+            raise KeyError(course_id)
+        fields: dict = {}
+        if order is not None:
+            if order not in ("lectures", "sections"):
+                raise AnalysisError("Order by whole lectures or section by section.")
+            fields["order"] = order
+        if auto_order is not None:
+            fields["auto_order"] = auto_order
+        if fields:
+            self.repo.save_curriculum(course_id, **fields)
+        if auto_order:
+            self.order_curriculum(course_id)
+        return self.course(course_id)
+
+    def order_curriculum(self, course_id: str) -> list[str]:
+        """Put a curriculum's lectures in the order they build on each other (no model
+        calls): each course keeps its own order; another course or a video goes before
+        the first lecture that needs what it teaches. Lectures not analyzed yet stay after
+        the one they followed. Saves the reasons; returns the video ids in order."""
+        data = self.repo.get_course(course_id)
+        cur = self.repo.get_curriculum(course_id)
+        if data is None or cur is None:
+            raise KeyError(course_id)
+        lectures = self._lectures(data)
+        sources = []
+        for i, lec in enumerate(lectures):
+            analysis = self.repo.get_analysis(lec.analysis_id) if lec.analysis_id else None
+            if analysis is not None and analysis.status == AnalysisStatus.DONE:
+                sources.append(
+                    Source(key=lec.video_id, analysis=analysis, rank=i, group=cur["groups"].get(lec.video_id, ""))
+                )
+        keys, kept = order_sources(sources, source_edges(sources))
+        order = list(keys)
+        for i, lec in enumerate(lectures):  # lectures without an analysis: after their old neighbour
+            if lec.video_id in order:
+                continue
+            prev = next((lectures[j].video_id for j in range(i - 1, -1, -1) if lectures[j].video_id in order), None)
+            order.insert(order.index(prev) + 1 if prev else 0, lec.video_id)
+        by_id = {x["video_id"]: x for x in data["lectures"]}
+        if order != [x["video_id"] for x in data["lectures"]]:
+            self.repo.update_course(course_id, lectures=[by_id[v] for v in order])
+        title = {lec.video_id: lec.title for lec in lectures}
+        notes, said = [], set()
+        for e in sorted(kept, key=lambda e: order.index(e.after)):
+            if e.before in said:
+                continue  # once per moved source: before the first lecture that needs it
+            said.add(e.before)
+            needs = ", ".join(x[:1].lower() + x[1:] if x[1:2].islower() else x for x in e.examples)
+            notes.append(f"“{_short(title[e.before])}” comes before “{_short(title[e.after])}”: it teaches {needs}.")
+        self.repo.save_curriculum(course_id, notes=notes)
+        return order
 
     def _course_lectures(self, lectures: list[CourseLecture]) -> list[Lecture]:
         out = []
@@ -1032,19 +1216,19 @@ class CurioService:
         self.repo.set_course_pins(course_id, pins)
         return pins
 
-    def _watched_sections(self, course: Course) -> set[tuple[str, str]]:
-        """(analysis id, section id) of every section in a part the learner marked
-        watched. A part key is looked up in the playlists on screen (Curio's and the
-        learner's); an older key gives the section playing just after its start."""
+    def _course_watched_spans(self, course: Course) -> list[tuple[str, float, float]]:
+        """(video id, start, end) of the parts the learner marked watched in one course. A
+        part key is looked up in the playlists on screen (Curio's and the learner's); an
+        older key gives the section playing just after its start."""
         keys = self.repo.course_watched(course.id)
         if not keys:
-            return set()
-        out: set[tuple[str, str]] = set()
+            return []
+        out: list[tuple[str, float, float]] = []
         known: set[str] = set()
         for part in (course.plan.parts if course.plan else []) + (course.custom_parts or []):
-            if part.key in keys:
+            if part.key in keys and part.key not in known:
                 known.add(part.key)
-                out.update((part.analysis_id, sid) for sid in part.section_ids)
+                out.append((part.video_id, part.start_s, part.end_s))
         by_video = {lec.video_id: lec.analysis_id for lec in course.lectures if lec.analysis_id}
         for key in keys - known:
             video_id, _, start = key.rpartition("@")
@@ -1053,7 +1237,43 @@ class CurioService:
             if analysis is None or not start.isdigit():
                 continue
             t = int(start) + 3  # a part starts 2 s before its first section
-            out.update((aid, s.section.id) for s in analysis.sections if s.section.start_s <= t < s.section.end_s)
+            out += [
+                (video_id, s.section.start_s, s.section.end_s)
+                for s in analysis.sections
+                if s.section.start_s <= t < s.section.end_s
+            ]
+        return out
+
+    def _watched_spans(self, course: Course) -> dict[str, list[tuple[float, float]]]:
+        """Stretches of each video the learner marked watched anywhere: video playlists
+        and every course (this one as passed in, others as saved)."""
+        spans = list(self.repo.completed_spans()) + self._course_watched_spans(course)
+        for cid in self.repo.watched_course_ids():
+            if cid != course.id:
+                other = self.course(cid)
+                if other is not None:
+                    spans += self._course_watched_spans(other)
+        out: dict[str, list[tuple[float, float]]] = {}
+        for video_id, a, b in spans:
+            out.setdefault(video_id, []).append((a, b))
+        return out
+
+    def _watched_sections(self, course: Course) -> set[tuple[str, str]]:
+        """(analysis id, section id) of the course's sections the learner has watched
+        anywhere: at least 80% of the section lies in stretches marked watched in a video
+        playlist or any course (sections are matched by time, so a video analyzed for
+        another goal counts too)."""
+        spans = self._watched_spans(course)
+        out: set[tuple[str, str]] = set()
+        for lec in course.lectures:
+            mine = spans.get(lec.video_id)
+            analysis = self.repo.get_analysis(lec.analysis_id) if mine and lec.analysis_id else None
+            if analysis is None:
+                continue
+            for s in analysis.sections:
+                a, b = s.section.start_s, s.section.end_s
+                if b > a and _covered(a, b, mine) >= 0.8 * (b - a):
+                    out.add((analysis.id, s.section.id))
         return out
 
     def set_course_playlist(self, course_id: str, sections: list[str] | None) -> Course:
@@ -1087,7 +1307,11 @@ class CurioService:
         self, course_id: str, minutes: int | None = None, *, force: bool = False
     ) -> tuple[str, bool]:
         """Register a course playlist built from the lectures analyzed so far. Returns
-        (plan_id, needs_run); reuses one with identical inputs unless `force`."""
+        (plan_id, needs_run); reuses one with identical inputs unless `force`. A
+        curriculum is put in order first (unless the learner ordered it)."""
+        cur = self.repo.get_curriculum(course_id)
+        if cur is not None and cur["auto_order"]:
+            self.order_curriculum(course_id)
         course = self.course(course_id)
         if course is None:
             raise KeyError(course_id)
@@ -1098,6 +1322,8 @@ class CurioService:
         if not 10 <= minutes <= 1200:
             raise AnalysisError("Choose between 10 minutes and 20 hours.")
         key = f"{','.join(ids)}|{minutes}|{self.course_llm_key()}"
+        if cur is not None:
+            key += f"|order:{cur['order']}"
         pins = self.repo.course_pins(course_id)
         if pins:  # pinning changes the playlist: build it again
             key += "|pins:" + hashlib.sha256(",".join(pins).encode()).hexdigest()[:12]
@@ -1143,6 +1369,7 @@ class CurioService:
                 )
             anthropic = self.llm.name == "anthropic"
             pinned = {tuple(x.split(":", 1)) for x in self.repo.course_pins(pending.course_id)}
+            cur = self.repo.get_curriculum(pending.course_id)
             shown = self.course(pending.course_id)
             watched = self._watched_sections(shown) if shown else set()
             plan = build_course_plan(
@@ -1160,6 +1387,8 @@ class CurioService:
                 progress=report,
                 pinned=pinned,
                 watched=watched,
+                groups=cur["groups"] if cur else None,
+                by_section=bool(cur and cur["order"] == "sections"),
             )
             plan.created_at = pending.created_at
             self.repo.save_course_plan(plan)
@@ -1466,3 +1695,20 @@ def _renumber[M: BaseModel](model: M, positions: dict[str, int]) -> M:
     data = model.model_dump(mode="json")
     walk(data)
     return type(model).model_validate(data)
+
+
+def _covered(a: float, b: float, spans: list[tuple[float, float]]) -> float:
+    """Seconds of [a, b] inside the union of `spans`."""
+    total, end = 0.0, a
+    for x, y in sorted(spans):
+        x, y = max(x, end), min(y, b)
+        if y > x:
+            total += y - x
+            end = y
+    return total
+
+
+def _short(title: str, limit: int = 60) -> str:
+    """A title without its channel or course suffix ("RAG Explained | Stanford …")."""
+    head = re.split(r"\s[|:–-]\s", title)[0].strip() or title
+    return head if len(head) <= limit else head[: limit - 1].rstrip() + "…"

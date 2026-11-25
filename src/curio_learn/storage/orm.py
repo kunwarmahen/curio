@@ -246,6 +246,21 @@ class CustomPlaylistRow(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
 
 
+class CurriculumRow(Base):
+    """A course that is a curriculum: one goal across courses and videos, ordered by what
+    builds on what."""
+
+    __tablename__ = "curricula"
+
+    course_id: Mapped[str] = mapped_column(ForeignKey("courses.id", ondelete="CASCADE"), primary_key=True)
+    goal: Mapped[str] = mapped_column(Text)
+    order_mode: Mapped[str] = mapped_column(String(16), default="lectures")  # or "sections"
+    groups: Mapped[dict] = mapped_column(JSON, default=dict)  # video id -> its course id ("" alone)
+    auto_order: Mapped[bool] = mapped_column(Boolean, default=True)  # off once the learner reorders
+    notes: Mapped[list] = mapped_column(JSON, default=list)  # why sources moved
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
 class CoursePinsRow(Base):
     """Sections the learner pinned: kept in Curio's course playlist whenever it's built,
     as "analysis id:section id"."""

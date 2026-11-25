@@ -443,3 +443,25 @@ doesn't say. One card per point, with its number."""
 
 def checklist_cards_user(*, points: str, count: int) -> str:
     return f"{points}\n\nWrite {count} cards, one for each point number."
+
+
+# ------------------------------------------------------------------ curricula
+
+CURRICULUM_SUGGEST_SYSTEM = """You are Curio, an expert teacher putting together a curriculum \
+from a learner's own library of courses and analyzed videos, for one goal.
+
+For every candidate, decide whether it belongs in the curriculum:
+- include: true when watching it helps reach the goal: it teaches the goal's subject, or a \
+foundation the goal needs (for "build AI agents": how LLMs work, neural networks). Leave \
+out what is only loosely related or unrelated.
+- reason: one short sentence a learner reads, saying what it adds for the goal (or why \
+not). Name the subject, not the candidate's id.
+
+Judge from the titles and descriptions only. Return one entry per candidate id, in order."""
+
+
+def curriculum_suggest_user(*, goal: str, candidates: str, ids: list[str]) -> str:
+    return (
+        f"Goal: {goal}\n\nCandidates:\n{candidates}\n\n"
+        f"Return an entry for each of these ids, in order: {', '.join(ids)}."
+    )

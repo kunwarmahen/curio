@@ -27,6 +27,7 @@ from typing import Literal
 from pydantic import BaseModel
 
 from curio_learn.analysis import prompts
+from curio_learn.analysis.curriculum import Placed, Source, order_sections, outside_needs
 from curio_learn.analysis.playlist import BEYOND_BUDGET, PlaylistConfig, _segment, select_sections
 from curio_learn.analysis.profiles import learner_brief
 from curio_learn.analysis.redundancy import similarity_matrix
@@ -348,44 +349,68 @@ def course_parts(
     chosen: set[str],
     related: dict[str, list[CourseRef]],
     config: PlaylistConfig,
+    sequence: Sequence[str] | None = None,
 ) -> list[CoursePart]:
     """The chosen items as playlist parts, in lecture order, merged within a lecture
-    like a video playlist. `related` maps an item key to sections of other lectures."""
-    parts: list[CoursePart] = []
-    for lec in lectures:
-        mine = sorted((it for it in items if it.lecture is lec and it.key in chosen), key=lambda it: it.section.start_s)
-        groups: list[list[Item]] = []
-        for it in mine:
-            if groups and it.section.start_s - groups[-1][-1].section.end_s <= config.merge_gap_s:
-                groups[-1].append(it)
-            else:
-                groups.append([it])
-        for n, group in enumerate(groups, 1):
-            seg = _segment([it.scored for it in group], n, True, lec.analysis.video.duration_s, config)
-            seen: set[tuple[str, str]] = set()
-            also = []
-            for it in group:
-                for ref in related.get(it.key, []):
-                    if (ref.video_id, ref.section_id) not in seen:
-                        seen.add((ref.video_id, ref.section_id))
-                        also.append(ref)
-            parts.append(
-                CoursePart(
-                    key=f"{lec.analysis.video.video_id}@{int(seg.start_s)}",
-                    lecture=lec.position,
-                    video_id=lec.analysis.video.video_id,
-                    analysis_id=lec.analysis.id,
-                    section_ids=seg.section_ids,
-                    title=seg.title,
-                    start_s=seg.start_s,
-                    end_s=seg.end_s,
-                    what_you_learn=seg.what_you_learn,
-                    why_valuable=seg.why_valuable,
-                    importance=seg.importance,
-                    score=seg.score,
-                    also_in=also[:3],
-                )
+    like a video playlist. `related` maps an item key to sections of other lectures.
+    With `sequence` (every chosen key, in the order to play: a curriculum section by
+    section), parts follow it, and sections merge only when they follow each other in
+    it and in their lecture."""
+
+    def close(a: Item, b: Item) -> bool:
+        return a.lecture is b.lecture and 0 <= b.section.start_s - a.section.end_s <= config.merge_gap_s
+
+    runs: list[list[Item]] = []
+    if sequence is None:
+        for lec in lectures:
+            mine = sorted(
+                (it for it in items if it.lecture is lec and it.key in chosen), key=lambda it: it.section.start_s
             )
+            for it in mine:
+                if runs and close(runs[-1][-1], it):
+                    runs[-1].append(it)
+                else:
+                    runs.append([it])
+    else:
+        by_key = {it.key: it for it in items}
+        for key in sequence:
+            it = by_key.get(key)
+            if it is None or it.key not in chosen:
+                continue
+            if runs and close(runs[-1][-1], it):
+                runs[-1].append(it)
+            else:
+                runs.append([it])
+    parts: list[CoursePart] = []
+    count: dict[int, int] = {}
+    for group in runs:
+        lec = group[0].lecture
+        n = count[lec.position] = count.get(lec.position, 0) + 1
+        seg = _segment([it.scored for it in group], n, True, lec.analysis.video.duration_s, config)
+        seen: set[tuple[str, str]] = set()
+        also = []
+        for it in group:
+            for ref in related.get(it.key, []):
+                if (ref.video_id, ref.section_id) not in seen:
+                    seen.add((ref.video_id, ref.section_id))
+                    also.append(ref)
+        parts.append(
+            CoursePart(
+                key=f"{lec.analysis.video.video_id}@{int(seg.start_s)}",
+                lecture=lec.position,
+                video_id=lec.analysis.video.video_id,
+                analysis_id=lec.analysis.id,
+                section_ids=seg.section_ids,
+                title=seg.title,
+                start_s=seg.start_s,
+                end_s=seg.end_s,
+                what_you_learn=seg.what_you_learn,
+                why_valuable=seg.why_valuable,
+                importance=seg.importance,
+                score=seg.score,
+                also_in=also[:3],
+            )
+        )
     return parts
 
 
@@ -428,6 +453,8 @@ def build_course_plan(
     progress: Progress = lambda _: None,
     pinned: set[tuple[str, str]] = frozenset(),
     watched: set[tuple[str, str]] = frozenset(),
+    groups: dict[str, str] | None = None,
+    by_section: bool = False,
 ) -> CoursePlan:
     """`pinned` and `watched` are (analysis id, section id): pinned sections are always in
     the playlist; watched ones start `WATCHED_PENALTY` points lower."""
@@ -471,6 +498,41 @@ def build_course_plan(
         )
         for it in items
     ]
+    # A curriculum: a section another course or video needs becomes a prerequisite of the
+    # section that needs it (added when it fits, played first), as `builds_on` is within
+    # a video. A plain course has no such needs: its lectures are one group.
+    sources: list[Source] = []
+    if groups is not None:
+        sources = [
+            Source(
+                key=lec.analysis.video.video_id,
+                analysis=lec.analysis,
+                rank=lec.position,
+                group=groups.get(lec.analysis.video.video_id, ""),
+            )
+            for lec in lectures
+        ]
+        key_of = {(it.lecture.analysis.video.video_id, it.section.id): it.key for it in items}
+        extra: dict[str, list[str]] = {}
+        for src, needs in outside_needs(sources).items():
+            for n in needs:
+                mine = key_of.get((src, n.section_id))
+                for other, sid in n.taught_by.items():
+                    teacher = key_of.get((other, sid))
+                    if mine and teacher and teacher not in extra.get(mine, []):
+                        extra.setdefault(mine, []).append(teacher)
+        merged = [
+            m.model_copy(
+                update={
+                    "evaluation": m.evaluation.model_copy(
+                        update={"builds_on": [*m.evaluation.builds_on, *extra[m.section.id]]}
+                    )
+                }
+            )
+            if m.section.id in extra
+            else m
+            for m in merged
+        ]
     excludes: dict[str, set[str]] = {}
     for p in repeats:
         excludes.setdefault(p.a.key, set()).add(p.b.key)
@@ -489,7 +551,22 @@ def build_course_plan(
             related.setdefault(p.a.key, []).append(p.b.ref())
             related.setdefault(p.b.key, []).append(p.a.ref())
 
-    parts = course_parts(lectures, items, chosen, related, config)
+    sequence = None
+    if by_section and chosen and sources:
+        # A curriculum, section by section: a chosen section moves ahead of one in another
+        # course that needs what it teaches. `groups` maps a video to its course.
+        placed = [
+            Placed(
+                key=it.key,
+                source=it.lecture.analysis.video.video_id,
+                section_id=it.section.id,
+                start_s=it.section.start_s,
+            )
+            for it in items
+            if it.key in chosen
+        ]
+        sequence = order_sections(placed, sources, [s.key for s in sources])
+    parts = course_parts(lectures, items, chosen, related, config, sequence=sequence)
 
     skipped: list[CourseRepeat] = []
     listed: set[str] = set()
@@ -548,6 +625,7 @@ def build_course_plan(
             for p in pairs
         ],
         checklist=checklist,
+        order="sections" if by_section else "lectures",
         warnings=warnings,
         llm=LLMInfo(provider=provider.name, models={"course": model}),
         elapsed_s=round(time.monotonic() - started, 1),

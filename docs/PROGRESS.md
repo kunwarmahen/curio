@@ -12,7 +12,7 @@
 | LAN access | ✅ app and Podman container listen on all interfaces by default |
 | Phase 3: Interactive learning | ✅ Ask the Video, quizzes and flashcards with spaced repetition, a remembered default goal, segment completion tracking, and saved custom playlists |
 | Overnight queue | ✅ queue videos any time; analyzed 1–7 AM while the GPU is idle; a paused analysis resumes after its last finished step |
-| Phase 4: Multi-video intelligence | 🟡 learning paths across courses, courses from YouTube playlists, one course playlist across lectures without repeats (every verdict shown) that you can edit, pin and reorder (rebuilds prefer what you haven't watched), an "easy to miss" checklist, Ask the course, and a course quiz and flashcards; curricula across courses are not built (draft plan below) |
+| Phase 4: Multi-video intelligence | ✅ learning paths across courses, courses from YouTube playlists, one course playlist across lectures without repeats (every verdict shown) that you can edit, pin and reorder (rebuilds prefer what you haven't watched), an "easy to miss" checklist, Ask the course, and a course quiz and flashcards; curricula across courses: Curio suggests sources for a goal, orders them by what builds on what (whole lectures or section by section), and skips what you've watched anywhere |
 
 ## Phase 1 log (2026-11-23)
 
@@ -727,38 +727,48 @@ definitions, 12 takeaways, 33 answer parts):
   buttons, pinning saves and shows "Pinned" with a note to build again; no page errors,
   no sideways scroll. 3 new tests (183 in total).
 
-### Plan: curricula across courses (draft, 2026-11-25)
-Already built: courses (one playlist across a playlist's lectures, repeats left out),
-learning paths (courses joined in the order the learner picks), pins, unwatched first.
-A curriculum adds, for one goal ("build agents"):
-1. **Sources from the whole library**: courses and single videos, chosen by the learner
-   or suggested by Curio from what's analyzed (matching the goal against overviews and
-   key concepts).
-2. **Order by what builds on what**: section `builds_on`, `prerequisites` and
-   `introduces_concepts` matched across videos give a dependency graph; a topological
-   order, with course order as the tie-break, replaces "the order you picked".
-3. **Skip what you've covered**: watched parts of any video or course count, not only
-   this course's, plus repeats across sources (the course pair check, run across all
-   sources).
-4. **One playlist**: the course selector (pins, unwatched first, repeats) over all
-   sources, played in the curriculum's order.
-Decided (2026-11-25):
-- **Sources:** Curio suggests courses and videos from the library for the goal; the
-  learner adds or removes before it builds.
-- **Order:** a setting per curriculum, chosen by the learner and changeable later
-  (the playlist rebuilds): *whole lectures* (default; lectures and videos ordered by
-  what builds on what, each keeping its own section order) or *section by section*
-  (sections from different lectures may interleave when one builds on another).
-- **Covered:** sections watched anywhere (any video playlist or course); analyzed but
-  unwatched videos count as new.
-- Finding new YouTube videos for gaps is out of scope for a first version.
-
-Build order: (1) suggest sources for a goal and confirm; (2) the dependency graph and
-both orderings, checked offline on CS329Z plus the other analyzed videos; (3) watched
-anywhere and repeats across sources in the selector; (4) the curriculum page (reusing
-the course page) with the order setting; (5) overnight rebuilds as for courses.
+### Curricula across courses (2026-11-25)
+Built to the plan decided with the learner (Curio suggests, you confirm; order by whole
+lectures or section by section, your choice; watched anywhere counts as covered).
+1. **Suggesting sources:** one model call over the library (courses and analyzed
+   videos outside them). "Build AI agents" on the calibration library picked CS329Z,
+   Karpathy's LLM talk and 3Blue1Brown's neural networks, and left out algorithms, the
+   brain lecture and the sleep podcast, each with a reason; "Sleep better and
+   understand the brain" picked exactly the other two. 24 s cold, 6 s warm.
+2. **Order by what builds on what** (no model calls): section prerequisites matched
+   to concepts other sources teach. First tries: matching every lecture against every
+   other put CS329Z's lecture 7 before lecture 2 (a course's lectures share vocabulary),
+   and "basic vector search" matched 3Blue1Brown's "Vectors". Now a course keeps its own
+   order, a concept must cover the whole need, and a need many sources teach counts
+   for little. Picking the lowest-ranked ready source let the sleep podcast jump to
+   second; sources are now pulled in just before what needs them. Result (sources
+   given in a bad order): Lecture 1, Karpathy, Lectures 2–4, 3Blue1Brown, Lectures 5–9,
+   guest lecture, then sleep and algorithms, with "Why this order" notes.
+3. **Section by section**: a teaching section moves ahead of a section of another
+   course that needs it; each course keeps its lecture order (a first version let
+   lecture 3 jump ahead of lecture 2). A needed teaching section becomes a
+   prerequisite, added when it fits.
+4. **Watched anywhere**: a course's sections count as watched when 80% of them lies in
+   stretches marked watched in any video playlist or course (matched by time, so other
+   goals' analyses count). This applies to every course build, not only curricula.
+5. **Pages:** "Plan a curriculum" on the Courses page (Suggest or Pick them myself,
+   order, name); on the curriculum's page its goal, the order switch (with a "Build
+   again" note when the playlist was built the other way), "Why this order", and "Let
+   Curio order them" after a manual reorder. Overnight rebuilds work as for courses.
+- Checked in a browser on a copy of the calibration database (1280 and 390 px): making
+  a curriculum by hand, the panel, switching the order; no page errors, no sideways
+  scroll. 9 new tests (192 in total).
 
 ### Known gaps / next steps
+- Curricula match needs to concepts by words, not meaning: "LLM" and "large language
+  model" don't match, and a vague prerequisite ("Python basics") can match a talk that
+  only mentions Python. Embeddings (already used for course pairs) could help.
+- Section by section only reorders what the playlist holds: when the section that
+  teaches a need doesn't fit the time, nothing moves (seen with Karpathy put last by
+  hand in a 3-hour playlist).
+- The learner's own course playlist plays in lecture order even in a curriculum set to
+  section by section.
+- A curriculum doesn't queue lectures of its courses that aren't analyzed yet.
 - The Anthropic provider has not been run against the live API (no credentials
   here); `curio check-claude` checks it with one tiny request.
 - Scores are capped at 100, so with the beginner foundation bonus several top sections

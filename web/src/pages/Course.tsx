@@ -10,6 +10,7 @@ import {
   type CoursePractice,
   type CourseSectionChoice,
   type Citation,
+  type CurriculumOrder,
 } from '../api'
 import { AskThread } from '../components/Ask'
 import { FlashcardSession } from '../components/Flashcards'
@@ -70,10 +71,12 @@ export function CoursePage({ id }: { id: string }) {
         <h1>{course.title}</h1>
         <p className="muted">
           {course.channel && `${course.channel}. `}
-          {course.lectures.length} lectures, {duration(total)}. Goal: {PROFILES[prefs.profile].label}
+          {course.lectures.length} {course.curriculum ? 'lectures and videos' : 'lectures'}, {duration(total)}.{' '}
+          {course.curriculum ? 'Sections scored for' : 'Goal'}: {PROFILES[prefs.profile].label}
           {prefs.custom_objective && <>, “{prefs.custom_objective}”</>}.
         </p>
       </header>
+      {course.curriculum && <CurriculumPanel course={course} onChange={reload} />}
       {course.importing && (
         <p className="notes__progress" aria-live="polite">
           Checking each lecture's captions and queuing the ones not analyzed yet…
@@ -100,6 +103,92 @@ export function CoursePage({ id }: { id: string }) {
   )
 }
 
+
+const ORDERS = [
+  [
+    'lectures',
+    'Whole lectures',
+    'Each lecture or video plays through. A video another course needs comes before the first lecture that needs it; each course keeps its own order.',
+  ],
+  [
+    'sections',
+    'Section by section',
+    "Sections from different lectures interleave: a section another one needs plays before it. Each course still keeps its own order.",
+  ],
+] as const
+
+/** A curriculum's goal, how it's ordered, and why things moved. */
+function CurriculumPanel({ course, onChange }: { course: Course; onChange: () => void }) {
+  const cur = course.curriculum!
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  const change = async (settings: { order?: CurriculumOrder; auto_order?: boolean }) => {
+    setBusy(true)
+    setErr('')
+    try {
+      await api.setCurriculum(course.id, settings)
+      onChange()
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : 'Could not change the order.')
+    } finally {
+      setBusy(false)
+    }
+  }
+  const built = course.plan?.status === 'done' ? (course.plan.order ?? 'lectures') : null
+  return (
+    <section className="curriculum" aria-labelledby="curriculum-heading">
+      <h2 id="curriculum-heading">Curriculum: {cur.goal}</h2>
+      <div className="curriculum__order">
+        <span className="muted">Order:</span>
+        <fieldset className="segmented" disabled={busy}>
+          <legend className="visually-hidden">Order</legend>
+          {ORDERS.map(([value, label]) => (
+            <label key={value} className="segmented__option">
+              <input
+                type="radio"
+                name="curriculum-order"
+                checked={cur.order === value}
+                onChange={() => change({ order: value })}
+              />
+              <span>{label}</span>
+            </label>
+          ))}
+        </fieldset>
+      </div>
+      <p className="hint">{ORDERS.find(([v]) => v === cur.order)![2]}</p>
+      {built && built !== cur.order && (
+        <p className="hint" role="status">
+          The playlist below is ordered by {built === 'sections' ? 'section' : 'whole lectures'}: use{' '}
+          <strong>Build again</strong> to apply the new order.
+        </p>
+      )}
+      {cur.auto_order ? (
+        cur.notes.length > 0 && (
+          <details className="curriculum__why">
+            <summary>Why this order</summary>
+            <ul>
+              {cur.notes.map((n) => (
+                <li key={n}>{n}</li>
+              ))}
+            </ul>
+          </details>
+        )
+      ) : (
+        <p className="hint">
+          You've put the lectures in your own order.{' '}
+          <button type="button" className="button-quiet" disabled={busy} onClick={() => change({ auto_order: true })}>
+            Let Curio order them
+          </button>
+        </p>
+      )}
+      {err && (
+        <p className="form-error" role="alert">
+          {err}
+        </p>
+      )}
+    </section>
+  )
+}
 
 function PlanSection({ course, onChange }: { course: Course; onChange: () => void }) {
   const usable = course.lectures.filter((l) => l.analysis_id).length

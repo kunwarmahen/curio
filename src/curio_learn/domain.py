@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import BaseModel, Field, computed_field
 
@@ -562,6 +563,8 @@ class CoursePlan(BaseModel):
     repeats: list[CourseRepeat] = Field(default_factory=list)
     pairs: list[CoursePair] = Field(default_factory=list)  # every pair judged, closest first
     checklist: list[ChecklistItem] = Field(default_factory=list)
+    # How the parts are ordered: by lecture, or section by section (a curriculum).
+    order: Literal["lectures", "sections"] = "lectures"
     warnings: list[str] = Field(default_factory=list)
     llm: LLMInfo | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
@@ -581,12 +584,38 @@ class Course(BaseModel):
     plan_stale: bool = False  # lectures were analyzed (or changed) since the plan was built
     # The learner's own course playlist, when they saved one (None: Curio's picks).
     custom_parts: list[CoursePart] | None = None
+    curriculum: CurriculumInfo | None = None  # set when the course is a curriculum
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
     @computed_field
     @property
     def url(self) -> str:
         return f"https://www.youtube.com/playlist?list={self.playlist_id}" if self.playlist_id else ""
+
+
+class CurriculumInfo(BaseModel):
+    """What makes a course a curriculum."""
+
+    goal: str
+    order: Literal["lectures", "sections"] = "lectures"
+    auto_order: bool = True  # Curio orders the lectures; off once the learner reorders them
+    notes: list[str] = Field(default_factory=list)  # why a lecture or video was moved
+
+
+class CurriculumSource(BaseModel):
+    kind: Literal["course", "video"]
+    id: str  # a course id, or a video's analysis id
+
+
+class CurriculumCandidate(BaseModel):
+    """A course or video Curio could put in a curriculum, for the learner to confirm."""
+
+    kind: Literal["course", "video"]
+    id: str
+    title: str
+    detail: str = ""  # "10 lectures", or the channel and length
+    suggested: bool = False
+    reason: str = ""
 
 
 class CourseSectionChoice(BaseModel):

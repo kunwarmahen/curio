@@ -26,6 +26,8 @@ from curio_learn.domain import (
     CourseAnswer,
     CoursePractice,
     CourseSectionChoice,
+    CurriculumCandidate,
+    CurriculumSource,
     FlashcardDeck,
     LearningNotes,
     LearningPreferences,
@@ -121,6 +123,22 @@ class CourseRequest(BaseModel):
 class GroupRequest(BaseModel):
     title: str = ""
     analysis_ids: list[str]
+
+
+class SuggestCurriculumRequest(BaseModel):
+    goal: str
+
+
+class CurriculumRequest(BaseModel):
+    goal: str
+    title: str = ""
+    sources: list[CurriculumSource]
+    order: str = "lectures"  # or "sections"
+
+
+class CurriculumSettingsBody(BaseModel):
+    order: str | None = None
+    auto_order: bool | None = None
 
 
 class CombineRequest(BaseModel):
@@ -394,6 +412,26 @@ def create_app(service: CurioService | None = None) -> FastAPI:
             return CourseAccepted(course_id=svc(request).combine_courses(body.title, body.course_ids))
         except KeyError:
             raise HTTPException(404, {"code": "not_found", "message": "Unknown course id"}) from None
+
+    @app.get("/api/v1/curricula/candidates", response_model=list[CurriculumCandidate])
+    def curriculum_candidates(request: Request):
+        return svc(request).curriculum_candidates()
+
+    @app.post("/api/v1/curricula/suggest", response_model=list[CurriculumCandidate])
+    def suggest_curriculum(body: SuggestCurriculumRequest, request: Request):
+        return svc(request).suggest_curriculum(body.goal)
+
+    @app.post("/api/v1/curricula", status_code=201, response_model=CourseAccepted)
+    def create_curriculum(body: CurriculumRequest, request: Request):
+        course_id = svc(request).create_curriculum(body.goal, body.sources, title=body.title, order=body.order)
+        return CourseAccepted(course_id=course_id)
+
+    @app.put("/api/v1/courses/{course_id}/curriculum", response_model=Course)
+    def set_curriculum(course_id: str, body: CurriculumSettingsBody, request: Request):
+        try:
+            return svc(request).set_curriculum(course_id, order=body.order, auto_order=body.auto_order)
+        except KeyError:
+            raise HTTPException(404, {"code": "not_found", "message": "Not a curriculum"}) from None
 
     @app.get("/api/v1/courses", response_model=list[Course])
     def list_courses(request: Request):

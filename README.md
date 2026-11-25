@@ -211,6 +211,29 @@ overnight, the playlist is rebuilt by itself.
 on the Courses page joins them, in the order you pick, into one course, and
 everything above works across them.
 
+## Curricula
+
+A curriculum is one goal ("build AI agents") across courses *and* single videos from
+your library. On the Courses page, open **Plan a curriculum**, say what you want to
+learn and press **Suggest**: Curio reads your library and ticks what helps, with a
+reason for each (a few seconds with a local model). Untick or add what you like (or
+press **Pick them myself** to skip the suggestions), choose an order, and **Make the
+curriculum**.
+
+- **Whole lectures** (the default): each lecture or video plays through. A video that
+  a course needs goes just before the first lecture that needs it (Karpathy's LLM
+  talk before "LLMs for Agent Builders"); each course keeps its own lecture order;
+  anything nothing needs stays where you put it. **Why this order** on the
+  curriculum's page says what moved and why.
+- **Section by section**: sections from different lectures interleave when one needs
+  what another teaches. Each course still keeps its order.
+
+You can switch the order on the curriculum's page any time (then **Build again**).
+Curio also leaves out what you've **already watched anywhere**, in a video's own
+playlist or any course. Everything a course has works for a curriculum too: the course
+playlist, pins, your own playlist, the checklist, Ask, quiz and flashcards. Moving a
+lecture by hand keeps your order until you press **Let Curio order them**.
+
 ## Using it from your phone or another computer
 
 Curio listens on your whole local network and prints the address when it starts

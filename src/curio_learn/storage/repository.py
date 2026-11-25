@@ -35,6 +35,7 @@ from curio_learn.storage.orm import (
     CourseQuestionRow,
     CourseRow,
     CourseWatchedRow,
+    CurriculumRow,
     CustomPlaylistRow,
     EmbeddingRow,
     NotesRow,
@@ -428,6 +429,20 @@ class Repository:
             )
             if row:
                 row.completed = completed
+
+    def completed_spans(self) -> list[tuple[str, float, float]]:
+        """(video id, start, end) of every video playlist part marked watched."""
+        with self.session() as db:
+            rows = db.execute(
+                select(AnalysisRow.video_id, SegmentRow.start_s, SegmentRow.end_s)
+                .join(AnalysisRow, AnalysisRow.id == SegmentRow.analysis_id)
+                .where(SegmentRow.completed.is_(True))
+            )
+            return [(v, float(a), float(b)) for v, a, b in rows]
+
+    def watched_course_ids(self) -> list[str]:
+        with self.session() as db:
+            return list(db.scalars(select(CourseWatchedRow.course_id).distinct()))
 
     def completed_segments(self, analysis_id: str) -> set[str]:
         with self.session() as db:
@@ -829,6 +844,7 @@ class Repository:
             db.execute(delete(CoursePlanRow).where(CoursePlanRow.course_id == course_id))
             db.execute(delete(CourseCustomPlaylistRow).where(CourseCustomPlaylistRow.course_id == course_id))
             db.execute(delete(CoursePinsRow).where(CoursePinsRow.course_id == course_id))
+            db.execute(delete(CurriculumRow).where(CurriculumRow.course_id == course_id))
             return db.execute(delete(CourseRow).where(CourseRow.id == course_id)).rowcount > 0
 
     def analyses_for_videos(self, video_ids: list[str]) -> list[dict]:
@@ -1005,6 +1021,30 @@ class Repository:
         with self.session() as db:
             row = db.get(CourseCustomPlaylistRow, course_id)
             return list(row.sections) if row else None
+
+    def get_curriculum(self, course_id: str) -> dict | None:
+        with self.session() as db:
+            row = db.get(CurriculumRow, course_id)
+            if row is None:
+                return None
+            return {
+                "goal": row.goal,
+                "order": row.order_mode,
+                "groups": dict(row.groups or {}),
+                "auto_order": bool(row.auto_order),
+                "notes": list(row.notes or []),
+            }
+
+    def save_curriculum(self, course_id: str, **fields) -> None:
+        """Create or update: `goal`, `order`, `groups`, `auto_order`, `notes`."""
+        names = {"order": "order_mode"}
+        with self.session() as db, db.begin():
+            row = db.get(CurriculumRow, course_id)
+            if row is None:
+                row = CurriculumRow(course_id=course_id, goal=fields.get("goal", ""))
+                db.add(row)
+            for k, v in fields.items():
+                setattr(row, names.get(k, k), v)
 
     def course_pins(self, course_id: str) -> list[str]:
         with self.session() as db:

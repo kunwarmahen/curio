@@ -196,6 +196,15 @@ class FakeLLM:
                     "recommendations": [{"text": "Try the method yourself.", "section_ids": [ids[0]]}],
                 }
             )
+        if name == "PicksOut":
+            import re
+
+            # Suggests every candidate whose description mentions "agents".
+            picks = [
+                {"id": cid, "include": "agents" in line.lower(), "reason": f"Reason for {cid}."}
+                for cid, line in re.findall(r"^\[(c\d+)\] (.*)$", user, re.M)
+            ]
+            return json.dumps({"picks": picks})
         if name == "OverlapOut":
             import re
 

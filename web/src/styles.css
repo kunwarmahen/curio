@@ -2154,3 +2154,55 @@ button.stretch:hover,
   gap: 0.5rem;
   margin-top: 0.75rem;
 }
+
+/* A curriculum's goal and order. */
+.curriculum {
+  margin: 0 0 1.5rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.curriculum h2 {
+  margin: 0 0 0.6rem;
+  font-size: var(--t-lead);
+}
+.curriculum__order {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+}
+.curriculum__order .segmented {
+  border: 0;
+  padding: 0;
+  margin: 0;
+}
+.curriculum__why ul {
+  margin: 0.4rem 0 0;
+  padding-left: 1.2rem;
+  font-size: var(--t-small);
+}
+.curriculum__why li + li {
+  margin-top: 0.3rem;
+}
+.curriculum__pick .checkbox {
+  align-items: flex-start;
+}
+.curriculum__pick .checkbox input {
+  margin-top: 0.2rem;
+  flex: none;
+}
+.curriculum__reason {
+  display: block;
+  font-size: var(--t-small);
+  color: var(--ink-muted);
+}
+.courses__kind {
+  color: var(--ink-muted);
+  font-weight: 400;
+}
+.courses__group .curriculum__order {
+  margin: 0.75rem 0;
+}
+

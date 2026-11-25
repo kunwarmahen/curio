@@ -390,6 +390,7 @@ export interface CoursePlan {
   repeats: CourseRepeat[]
   pairs?: CoursePair[] // missing on plans built before the comparisons were kept
   checklist: ChecklistItem[]
+  order?: CurriculumOrder // a curriculum section by section plays its parts in that order
   warnings: string[]
   elapsed_s: number
 }
@@ -406,7 +407,28 @@ export interface Course {
   plan: CoursePlan | null
   plan_stale: boolean
   custom_parts?: CoursePart[] | null // the learner's own course playlist, when saved
+  curriculum?: CurriculumInfo | null // set when the course is a curriculum
   url: string
+}
+
+export type CurriculumOrder = 'lectures' | 'sections'
+
+/** What makes a course a curriculum. */
+export interface CurriculumInfo {
+  goal: string
+  order: CurriculumOrder
+  auto_order: boolean // Curio orders the lectures; off once the learner reorders them
+  notes: string[] // why a lecture or video was moved
+}
+
+/** A course or video Curio could put in a curriculum. */
+export interface CurriculumCandidate {
+  kind: 'course' | 'video'
+  id: string
+  title: string
+  detail: string
+  suggested: boolean
+  reason: string
 }
 
 /** A section the learner can put in their own course playlist. */
@@ -544,6 +566,24 @@ export const api = {
     request<{ course_id: string }>('/courses/group', {
       method: 'POST',
       body: JSON.stringify({ title, analysis_ids: analysisIds }),
+    }),
+  curriculumCandidates: () => request<CurriculumCandidate[]>('/curricula/candidates'),
+  suggestCurriculum: (goal: string) =>
+    request<CurriculumCandidate[]>('/curricula/suggest', { method: 'POST', body: JSON.stringify({ goal }) }),
+  createCurriculum: (
+    goal: string,
+    sources: { kind: 'course' | 'video'; id: string }[],
+    order: CurriculumOrder,
+    title = '',
+  ) =>
+    request<{ course_id: string }>('/curricula', {
+      method: 'POST',
+      body: JSON.stringify({ goal, sources, order, title }),
+    }),
+  setCurriculum: (id: string, settings: { order?: CurriculumOrder; auto_order?: boolean }) =>
+    request<Course>(`/courses/${encodeURIComponent(id)}/curriculum`, {
+      method: 'PUT',
+      body: JSON.stringify(settings),
     }),
   combineCourses: (title: string, courseIds: string[]) =>
     request<{ course_id: string }>('/courses/combine', {

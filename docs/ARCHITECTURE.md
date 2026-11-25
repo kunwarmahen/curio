@@ -84,6 +84,7 @@ curio/
 │   │   ├── study.py          quizzes and flashcards, spaced-repetition schedule
 │   │   ├── course.py         course playlist across lectures: repeats, checklist
 │   │   ├── course_ask.py     Ask the course: search across lectures, cited answers
+│   │   ├── curriculum.py     curricula: needs across sources, ordering, suggesting sources
 │   │   └── pipeline.py       orchestrates the steps, reports progress, saves step checkpoints
 │   ├── storage/
 │   │   ├── orm.py            SQLAlchemy tables
@@ -189,6 +190,10 @@ invent a timestamp: code converts the numbers to the original cue times.
 | `POST` | `/flashcards/review` | `{study_id, card_id, grade: again\|good\|easy}` → `CardState` |
 | `GET`  | `/preferences/default` / `PUT` | the learner's default goal `{profile, custom_objective, target_minutes}` (`PUT` body `{preferences}`) |
 | `POST` | `/courses` | `{url, preferences}` → `202 {course_id}`: a course from a YouTube playlist (the same playlist and goal reuse the course). Its lectures are checked and queued in a background thread beside the job worker |
+| `GET`  | `/curricula/candidates` | `CurriculumCandidate[]`: every course (not curricula) and analyzed video outside them; no model call |
+| `POST` | `/curricula/suggest` | `{goal}` → the candidates with `suggested` and `reason` (one model call) |
+| `POST` | `/curricula` | `{goal, title?, sources: [{kind: course\|video, id}], order: lectures\|sections}` → `201 {course_id}`: a curriculum, ordered by what builds on what |
+| `PUT`  | `/courses/{id}/curriculum` | `{order?, auto_order?}` → `Course`; `404` for a plain course |
 | `POST` | `/courses/combine` | `{title, course_ids}` → `201 {course_id}`: a learning path, the courses' lectures in that order without duplicates, the first course's goal |
 | `POST` | `/courses/group` | `{title, analysis_ids}` → `201 {course_id}`: a course of analyzed videos, in upload order |
 | `GET`  | `/courses` / `/courses/{id}` | `Course`: lectures with their state (`ready`, `other_goal`, `queued`, `analyzing`, `failed`, `missing`), the newest `plan`, `plan_stale`, and `custom_parts` (the learner's own course playlist, or `null`; only on `/courses/{id}`) |
@@ -613,16 +618,68 @@ out; two pins that repeat each other both stay. Pins longer than the playlist al
 and nothing else does, with a warning. Pins are part of the plan key, so changing them
 makes the next build a real one.
 
-**Unwatched first.** When a plan is built, the sections in parts the learner marked
-watched (`_watched_sections`: a part key is looked up in the playlists on screen; an
-older key gives the section playing just after its start) start `WATCHED_PENALTY`
-(15) points lower, like a repeat's weaker half, so new material wins near ties and a
+**Unwatched first.** When a plan is built, the sections the learner has watched
+*anywhere* (`_watched_sections`: at least 80% of the section's time lies in stretches
+marked watched in a video playlist, `completed_spans`, or in any course; a course part
+key is looked up in that course's playlists, an older key gives the section playing
+just after its start; matching by time lets a video analyzed for another goal count)
+start `WATCHED_PENALTY` (15) points lower, like a repeat's weaker half, so new material wins near ties and a
 strong watched section can still stay. After the build, a new part made only of
 watched sections is marked watched, so marks survive a part's start moving. Watched
 marks aren't part of the plan key: a rebuild without `force` still reuses the plan.
 
 **Learning paths.** `combine_courses` makes a course from several courses' lectures in
 order; everything above then works across courses.
+
+**Curricula** (`analysis/curriculum.py`). A curriculum is a course with a row in
+`curricula` (`goal`, `order_mode` `lectures` | `sections`, `groups` mapping each video
+to its source course or `""` for a single video, `auto_order`, `notes`), so the page,
+plan, pins, watched marks, Ask and practice all work unchanged. Its scoring goal is
+the one most of its analyses were made with; nothing is re-analyzed, and lectures not
+analyzed yet aren't queued.
+- **Suggesting sources** (`suggest_sources`, one call, temperature 0): every course
+  (not curricula) and every analyzed video outside them, with lecture titles or the
+  overview and key concepts, under short ids (`c1`, …); the model says include or not
+  and why. If the call fails, candidates sharing a content word with the goal are
+  suggested. "Build AI agents" on the calibration library: CS329Z, Karpathy's LLM talk
+  and 3Blue1Brown's neural networks in, algorithms, the brain lecture and the sleep
+  podcast out, each with a reason (24 s cold, 6 s warm).
+- **Needs** (no model calls): a section's `prerequisites` phrase not taught earlier
+  in its own video, nor by an earlier lecture of its own course, is an outside need;
+  sources of *other* courses teach it when one of their concepts (`introduces_concepts`,
+  `key_concepts`) covers it: the concept holds every content word of the need ("Neural
+  network as a function" covers "basic neural network concepts"), or the need holds a
+  concept of two or more words, sharing a word that isn't broad ("model", "agent",
+  "system"). Filler ("basic", "understanding of") is dropped; words are roughly singular.
+- **Whole lectures** (`source_edges`, `order_sources`): A goes before B when A teaches
+  B's needs with weight ≥ 1.5 (each need counts 1 split among the sources that teach
+  it) and at least twice what B teaches of A's. A course's lectures always keep its
+  order; edges closing a cycle are dropped, weakest first. The order is the given one
+  with each source's predecessors pulled in just before it, so an unneeded video keeps
+  its place (picking the lowest-ranked ready source let the sleep podcast jump to
+  second whenever CS329Z waited on a foundation). Matching each lecture's needs with
+  everything put CS329Z's lecture 7 before lecture 2; hence the fixed course order.
+  `notes` say once per moved source what it teaches the first lecture that needs it.
+  Lectures without an analysis stay after their old neighbour. `submit_course_plan`
+  re-orders before every build unless the learner reordered by hand (`auto_order`).
+- **Section by section** (`order_sections`, plan `order: "sections"`): chosen
+  sections in lecture order, each source's in time order and each course's lectures in
+  order, with a chosen teaching section pulled ahead of a chosen section of another
+  course that needs it. `course_parts(sequence=…)` then merges only sections that
+  follow each other in that order and in their lecture; `course()` doesn't re-sort
+  such a plan by lecture.
+- **Needs as prerequisites:** in both modes, a teaching section another course needs
+  joins the needing section's `builds_on`, so the selector adds it when it fits (and it
+  plays first). A plan only orders what it holds: when the teaching section doesn't
+  fit, nothing moves.
+- Calibration library, offline (a stub model, so no repeats or checklist): CS329Z +
+  Karpathy + 3Blue1Brown given last + algorithms + sleep → Lecture 1, Karpathy,
+  Lectures 2–4, 3Blue1Brown, Lectures 5–9, guest lecture, then sleep and algorithms;
+  3 hours, 48 parts. Section by section, Karpathy's last two sections (which build on
+  retrieval) come after Lecture 3.
+- API: `GET /curricula/candidates`, `POST /curricula/suggest {goal}`,
+  `POST /curricula {goal, title?, sources[{kind, id}], order}` → `{course_id}`,
+  `PUT /courses/{id}/curriculum {order?, auto_order?}` → `Course` (with `curriculum`).
 
 **Course quiz and flashcards.** A study set per lecture with scope `course`: its
 `segment_ids` are the section ids the course playlist uses from that lecture, and its
