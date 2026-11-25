@@ -621,16 +621,46 @@ GEPA, 100, 9.3 min), bi-encoders vs. cross-encoders (95, 6 min) and agent anatom
 Parts get shorter (about 2.5 instead of 3.3 minutes). The CS329Z playlist changes the
 next time it's built. 2 new tests (177 in total).
 
+### Your goal's asks, and top sections in the playlist (2026-11-24)
+1. **What your goal asks for isn't marked down with what you know.** The own-goal
+   sentence said known material is low on novelty *and* relevance, and the model lowered
+   both for sections the goal asks for too. It now judges them separately: a plain
+   explanation of what the learner knows is low novelty; relevance is only whether the
+   section gives what they ask for (pitfalls, failure cases, lessons, frameworks), even
+   on a familiar topic. Lecture 1 with the own goal, two evaluation runs each:
+
+   | Section | Previous prompt | New prompt |
+   |---|---|---|
+   | Compound AI systems (the debugging framework) | 59 / 55 | 70 / 70 |
+   | LLM-era basics (what they know) | 47 / 31 | 45 / 42 |
+   | Anatomy of an LLM agent | 68 / 66 | 70 / 81 |
+   | Reliability, failure cases, privacy | – | 66–79, all in the playlist |
+
+   (Base ratings out of 100.)
+2. **A top section isn't crowded out by shorter ones.** Before the knapsack, sections
+   scored 95 or more go in first, best (then shortest) first, while each fits and they
+   fill at most half the playlist together; in a course, one that repeats a better
+   reserved section isn't reserved. Offline (no model calls):
+   - CS329Z course at 90 minutes: DSPy optimizers (100, 9.3 min) and bi-encoders vs.
+     cross-encoders (95, 6 min) are in; six shorter sections scored 78–91 (agent memory,
+     the LangGraph demo, handoffs vs. agent-as-tool, …) are out. 35 sections, 96 min.
+     At 180 minutes: 66 sections, 192 min. No repeat has both halves in either.
+   - 18 of 19 saved video analyses pick the same sections. Kubernetes for beginners
+     swaps Architecture (95, 4.5 min) and a short demo for Deployments (100, 6 min): the
+     sections tied at 100 fill the reserved half first (see the 100-cap gap below).
+   - MIT lecture 1's 10-minute proof still stays out of the 14-minute playlist.
+- 2 new tests (179 in total). Saved analyses and course plans change only when rebuilt
+  or re-run.
+
 ### Known gaps / next steps
 - The Anthropic provider has not been run against the live API (no credentials
   here); `curio check-claude` checks it with one tiny request.
 - Scores are capped at 100, so with the beginner foundation bonus several top sections
   tie at 100 and the bonus can't separate them (Kubernetes).
-- With the learner's own goal, sections the goal asks for can be marked down along with
-  what they know (Lecture 1's debugging framework).
-- The knapsack values a section by √minutes, so a long top section loses to several
-  shorter very good ones (CS329Z's 9.3-minute DSPy optimizers section, scored 100).
-  That's the intent, but whether √ is the right curve hasn't been tested with a learner.
+- Scores tied at 100 also fill the half of the playlist reserved for top sections in
+  score order, so a 95 foundation can lose its place to a 100 (Kubernetes Architecture).
+- The knapsack values a section by √minutes below the top sections; whether √ is the
+  right curve hasn't been tested with a learner.
 - The lexical redundancy threshold (0.45) wasn't examined in this calibration.
 - Repeat vs overlap verdicts vary run to run.
 - The made-up-names check covers names, not plain-word claims or numbers.

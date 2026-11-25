@@ -27,6 +27,10 @@ class PlaylistConfig:
     lead_in_s: float = 2.0  # start slightly before the first spoken word
     tail_s: float = 1.0
     budget_tolerance: float = 1.10
+    # A section scored at least this goes in first, while it and the other top sections
+    # fit in `top_share` of the playlist, so shorter sections can't crowd it out.
+    top_score: float = 95.0
+    top_share: float = 0.5
 
 
 def compute_budget(
@@ -96,9 +100,33 @@ def _knapsack(
     if not items:
         return set()
     limit = budget_s * config.budget_tolerance
+    lead = config.lead_in_s + config.tail_s
+    # Top sections first, best (then shortest) first, within `top_share` of the playlist.
+    # The knapsack alone left out CS329Z's DSPy optimizers section (100, 9.3 minutes of a
+    # 180-minute course playlist) for several shorter ones; the share keeps a 10-minute
+    # proof out of a 14-minute playlist (MIT 6.006 lecture 1).
+    reserved: set[str] = set()
+    room = limit * config.top_share
+    for s in sorted(items, key=lambda s: (-s.score.final, s.section.duration_s)):
+        need = s.section.duration_s + lead
+        if s.score.final < config.top_score:
+            break
+        if need > room:
+            continue
+        if any(s.section.id in excludes.get(x, ()) or x in excludes.get(s.section.id, ()) for x in reserved):
+            continue  # repeats a better top section
+        reserved.add(s.section.id)
+        room -= need
+    if reserved:
+        limit -= sum(s.section.duration_s + lead for s in items if s.section.id in reserved)
+        items = [
+            s
+            for s in items
+            if s.section.id not in reserved
+            and not any(s.section.id in excludes.get(x, ()) or x in excludes.get(s.section.id, ()) for x in reserved)
+        ]
     # 5 s steps, or coarser for a long course playlist (at most ~1,500 steps).
     unit = max(5.0, limit / 1500)
-    lead = config.lead_in_s + config.tail_s
     cost = [math.ceil((s.section.duration_s + lead) / unit) for s in items]
     # A section that better sections build on is worth a little more (10% per such
     # section, up to two), so a prerequisite wins a near tie with an unrelated section.
@@ -117,14 +145,14 @@ def _knapsack(
             if best[w - c] + v > best[w] + 1e-12:
                 best[w] = best[w - c] + v
                 take[i][w] = True
-    chosen: set[str] = set()
+    chosen: set[str] = set(reserved)
     w = cap
     for i in range(len(items) - 1, -1, -1):
         if take[i][w]:
             chosen.add(items[i].section.id)
             w -= cost[i]
     if not chosen:  # nothing fits: take the single best section anyway
-        return {max(items, key=lambda s: s.score.final).section.id}
+        return {max(items, key=lambda s: s.score.final).section.id} if items else set()
 
     # Direct prerequisites of the chosen sections, best sections first, when they fit.
     by_id = {s.section.id: s for s in scored}

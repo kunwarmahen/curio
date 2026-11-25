@@ -89,7 +89,10 @@ On the first page, paste a YouTube link and choose **what you're watching for**:
 
 Under **Describe your own goal or set a watch time** you can say what you want in
 your own words ("I want to understand how GEPA works; skip the course logistics")
-and set how many minutes you have. Otherwise Curio picks about a third of the video.
+and set how many minutes you have. If you say what you already know ("I've built a few
+agents; what might I have missed?"), Curio skips plain explanations of that but keeps
+the parts that give what you ask for, even on a familiar topic. Without a watch time,
+Curio picks about a third of the video.
 Your choice is remembered for next time, on every device.
 
 Then either:
@@ -105,7 +108,9 @@ A video you've already analyzed with the same goal opens straight away.
 **The watch map** shows the whole video as one line: strong yellow is essential,
 fainter is recommended or optional, hatched is safe to skip. Essential parts are
 always in your playlist; a part that scored as essential but didn't fit your watch
-time is shown as recommended, and "How it was scored" says so. Your playlist is
+time is shown as recommended, and "How it was scored" says so. The very best parts
+(scored 95 or more) go in first, as long as together they take at most half your watch
+time. Your playlist is
 underlined and a red line shows where playback is. Click any stretch to play it.
 
 **Your playlist** sits beside the player. Each part says what you'll learn and why

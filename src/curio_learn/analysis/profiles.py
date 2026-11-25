@@ -81,10 +81,12 @@ def learner_brief(prefs: LearningPreferences) -> str:
         brief += (
             "\nThe learner's own objective (this takes priority when judging relevance): "
             f'"{prefs.custom_objective.strip()}"'
-            "\nIf the objective says what the learner already knows, explanations of that "
-            "score low on novelty and relevance however well they are made; what the "
-            "objective asks for (for example pitfalls, or what they may have missed) scores "
-            "high on relevance."
+            "\nJudge novelty and relevance separately. If the objective says what the learner "
+            "already knows, a plain explanation of that scores low on novelty however well it "
+            "is made. Relevance is only whether the section gives what the objective asks for "
+            "(for example pitfalls, failure cases, lessons, frameworks, or what they may have "
+            "missed); a section that gives that scores high on relevance even when its topic "
+            "is familiar, and so does its novelty if it goes beyond the basics."
         )
     return brief
 

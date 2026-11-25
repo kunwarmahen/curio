@@ -232,3 +232,26 @@ def test_course_selection_handles_chains_of_repeats_and_prerequisites():
     chosen = select_sections(secs, budget_s=600, config=CFG, excludes=excludes)
     assert not any(b in chosen for a in chosen for b in excludes.get(a, ()))
     assert {"S01", "S03"} <= chosen
+
+
+def test_a_top_section_is_not_crowded_out_by_shorter_ones():
+    # CS329Z: DSPy optimizers (100, 9.3 min) lost to shorter sections in the knapsack.
+    top = scored(0, 100, dur=560)
+    shorter = [scored(i, 90, dur=100) for i in range(1, 30)]
+    chosen = select_sections([top, *shorter], budget_s=30 * 60, config=CFG)
+    assert "S00" in chosen
+    # Without the reservation the knapsack prefers the short ones.
+    plain = PlaylistConfig(merge_gap_s=CFG.merge_gap_s, top_score=101)
+    assert "S00" not in select_sections([top, *shorter], budget_s=30 * 60, config=plain)
+
+
+def test_top_sections_fill_at_most_half_the_playlist_and_skip_repeats():
+    tops = [scored(i, 100 - i, dur=300) for i in range(4)]  # 5 min each, all 95+
+    rest = [scored(i, 80, dur=60) for i in range(4, 30)]
+    chosen = select_sections([*tops, *rest], budget_s=20 * 60, config=CFG)
+    # Half of the 22-minute limit holds two top sections; the rest go to the knapsack.
+    assert {"S00", "S01"} <= chosen
+    # A top section that repeats a better one is not reserved, and never joins it.
+    excludes = {"S00": {"S01"}, "S01": {"S00"}}
+    chosen = select_sections([*tops, *rest], budget_s=20 * 60, config=CFG, excludes=excludes)
+    assert "S00" in chosen and "S01" not in chosen
