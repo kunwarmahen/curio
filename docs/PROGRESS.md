@@ -957,6 +957,14 @@ ReAct left and nothing said why.
   says so and marks the models Curio uses.
 - Checked in a browser on a test server (1280 and 390 px): no page errors and no
   sideways scroll; the menu has the new item. 5 new tests (214 in total).
+- **Live check** (after `./curio.sh restart`, 7:43 AM): the container runs with
+  `PidMode host`, and `/gpu` names all 8 programs from inside it, as on the host. The
+  page at 1280 and 390 px had no errors and no sideways scroll. With Curio idle,
+  qwen3.8-64k's unload time kept moving later (7:38, then 7:44), so another client
+  is using it. Connections to port 11434 in each container's `/proc/<pid>/net/tcp`
+  point at `sarathi-dvara` (open connection); `twitter-summary-agent` and
+  `blockoku-tunnel` also show connections, but those may be the host's own. The
+  page can't show this yet.
 
 ### Known gaps / next steps
 - The share and swap rule are now swept over two libraries, but both are the same
