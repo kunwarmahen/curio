@@ -18,15 +18,20 @@ function verdict(g: GpuStatus): string {
   const card = g.cards[0]
   if (!card) return g.nvidia_smi ? 'nvidia-smi found no GPU.' : 'Curio can’t read the GPU here (no nvidia-smi).'
   const util = card.utilization ?? 0
-  const top = g.processes.find((p) => p.kind !== 'graphics') ?? g.processes[0]
   const users = (g.ollama_clients ?? []).filter((c) => !c.curio && c.connected).map((c) => c.app || c.program)
-  const ollama =
-    top?.app.startsWith('ollama') && g.ollama.length
+  const name = (p: GpuProcess) =>
+    p.app.startsWith('ollama') && g.ollama.length
       ? `Ollama (${g.ollama.map((m) => m.name).join(', ')}${users.length ? `, used by ${users.join(', ')}` : ''})`
-      : ''
-  const who = ollama || (top ? `${top.program}${top.app ? ` (${top.app})` : ''}` : '')
-  if (util < 20) return who && (top?.memory_mb ?? 0) > 1024 ? `Mostly idle. ${who} holds ${size(top!.memory_mb)} of memory.` : 'Idle.'
-  return who ? `In use, ${util}% busy. The biggest user is ${who}, with ${size(top!.memory_mb)}.` : `In use, ${util}% busy.`
+      : `${p.program}${p.app ? ` (${p.app})` : ''}`
+  // The most memory (a loaded model, a training run), and what's computing right now.
+  const big = [...g.processes].sort((a, b) => (b.memory_mb ?? 0) - (a.memory_mb ?? 0))[0]
+  const busiest = [...g.processes]
+    .filter((p) => (p.utilization ?? 0) > 0)
+    .sort((a, b) => (b.utilization ?? 0) - (a.utilization ?? 0))[0]
+  const holds = big && (big.memory_mb ?? 0) > 1024 ? ` ${name(big)} holds ${size(big.memory_mb)} of memory.` : ''
+  if (util < 20) return `Mostly idle.${holds}`
+  const computing = busiest && busiest !== big ? ` Busiest right now: ${name(busiest)}, ${busiest.utilization}%.` : ''
+  return `In use, ${util}% busy.${holds}${computing}` + (holds || computing ? '' : ' No program stands out.')
 }
 
 function Meter({ label, value, max, text }: { label: string; value: number | null; max: number; text: string }) {

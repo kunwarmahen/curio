@@ -983,6 +983,17 @@ ReAct left and nothing said why.
     now", then as "last seen" with its time.
   - Checked in a browser at 1280 and 390 px: no page errors and no sideways scroll.
     4 new tests (218 in total).
+- **Live check** (after the restart, 7:56 AM): `/gpu` lists Curio as "Curio (this
+  app)". dvara was idle (no model loaded), so a throwaway container with its own user
+  namespace (`--userns=keep-id`, the curio image) held a plain connection to Ollama
+  for 40 s, sending no request. The live page showed "Container 161e1786d5fc", python,
+  "the container's main program", then "last seen 7:55 AM" once it closed. No errors
+  and no sideways scroll at 1280 and 390 px.
+- **The summary line** called gnome-remote-desktop (260 MB) "the biggest user" while
+  the GPU was 29% busy and no model was loaded: it picked by memory among
+  non-graphics programs. It now names whoever holds over 1 GB and, separately, the
+  busiest program in pmon's sample. When neither applies it says "No program stands
+  out."
 
 ### Known gaps / next steps
 - The share and swap rule are now swept over two libraries, but both are the same
