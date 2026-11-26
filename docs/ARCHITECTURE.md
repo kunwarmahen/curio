@@ -55,6 +55,7 @@ curio/
 │   ├── domain.py             Pydantic domain models (single source of truth)
 │   ├── service.py            CurioService façade used by every frontend
 │   ├── overnight.py          overnight queue: hours window, GPU idle check, worker
+│   ├── gpu.py                GPU page: cards, programs on the GPU, Ollama's models
 │   ├── ingestion/
 │   │   ├── url.py            YouTube URL → 11-char video id
 │   │   ├── metadata.py       MetadataProvider protocol + yt-dlp impl (no download)
@@ -189,6 +190,7 @@ invent a timestamp: code converts the numbers to the original cue times.
 | `DELETE` | `/queue/run-now` | back to the queue hours for everything waiting → `QueueStatus` |
 | `POST` | `/queue/{id}/start` | start a queued analysis now → `202` (`400` if it isn't queued any more) |
 | `DELETE` | `/queue/{id}` | remove a queued analysis |
+| `GET`  | `/gpu` | `GpuStatus`: `cards[]` (utilization, memory, temperature, power, fan), `processes[]` (pid, program, command with secrets hidden, `app` from the cgroup, kind, memory, utilization, running time, `curio`), `processes_visible`, `ollama[]` (loaded models, VRAM, `expires_at`, `curio_model`), and `curio_busy`, `curio_doing[]`, `curio_last_model_use`, `queue_message`. Read at most every 2 s |
 | `GET`  | `/videos/recent?limit=10` | `[ {video, analysis_id, profile, analyzed_at, playlist_s, watch_map[]} ]` |
 | `GET`  | `/videos/{video_id}/transcript` | `Transcript` (normalized blocks) |
 | `GET`  | `/analyses/{id}/completed` | ids of segments marked watched |
@@ -339,10 +341,14 @@ def generate_structured(provider, model_cls, *, system, user, task, retries=2) -
 - The image is built in Docker format, because the OCI format drops the health check.
 - The container gets the host's `/etc/localtime` (queue hours are local time) and,
   when an NVIDIA CDI spec exists (`CURIO_GPU_CHECK`, default on then), `--device
-  nvidia.com/gpu=all`, used only to read utilization with `nvidia-smi`.
+  nvidia.com/gpu=all`, used only to read utilization with `nvidia-smi`. With it,
+  `--pid=host` (`CURIO_GPU_PROCESSES`, default 1) lets the GPU page see the host's
+  processes. Inside its own PID namespace `nvidia-smi` lists no processes. The
+  trade-off: the container's root maps to the host user, so with the host's process
+  namespace it could also signal that user's processes.
 - Container variables: `CURIO_PORT` (8470), `CURIO_BIND` (0.0.0.0), `CURIO_VOLUME`
   (curio-data), `CURIO_OLLAMA_URL` (`http://host.containers.internal:11434`),
-  `CURIO_GPU_CHECK`, `CURIO_IMAGE` / `CURIO_CONTAINER`.
+  `CURIO_GPU_CHECK`, `CURIO_GPU_PROCESSES`, `CURIO_IMAGE` / `CURIO_CONTAINER`.
 
 ## 9. Learning notes (`analysis/notes.py`)
 
@@ -472,6 +478,23 @@ from the video's page. The window isn't checked again, as for a running analysis
 "Analyze now" and starting a queued video by hand don't prepare anything. In
 Podman, `curio.sh` mounts the host's `/etc/localtime` and, when an NVIDIA CDI spec
 exists, adds `--device nvidia.com/gpu=all` so `nvidia-smi` works in the container.
+
+**The GPU page** (`gpu.py`, `GET /gpu`). It reads one `nvidia-smi --query-gpu` and
+one `nvidia-smi pmon -c 1 -s um` sample. pmon covers graphics processes too and gives
+per-process SM %; its columns differ between drivers, so they're read from its header.
+For each pid it reads `/proc`:
+- `cmdline`: Chromium-style programs pack theirs into one string, which is split.
+  Flags and `KEY=value` arguments named token, key, secret, pass, auth or cred have
+  their values hidden, and long arguments are cut.
+- `cgroup`: gives the app. A `.service` becomes "ollama service"; a snap or
+  `app-gnome-*` scope becomes the app ("VS Code"), or "Started from VS Code" for
+  another program in it; `libpod-<id>.scope` becomes "Container <id>", or Curio's
+  own when the id matches the container's hostname.
+- `stat` plus `uptime`: running time.
+
+Ollama's `/api/ps` gives the loaded models. `processes_visible` is false when memory
+is in use but pmon lists nobody, which means a container without `--pid=host`. A
+`GpuWatch` on the app caches the report for 2 s, so several open pages cost one read.
 
 ## 12. Quizzes and flashcards (`analysis/study.py`)
 

@@ -1,5 +1,6 @@
 import { TopBar } from './components/TopBar'
 import { CoursePage } from './pages/Course'
+import { GpuPage } from './pages/Gpu'
 import { Home } from './pages/Home'
 import { CoursesPage, QueuePage, VideosPage } from './pages/Lists'
 import { Review } from './pages/Review'
@@ -19,6 +20,8 @@ function Page({ route }: { route: Route }) {
       return <VideosPage />
     case 'queue':
       return <QueuePage />
+    case 'gpu':
+      return <GpuPage />
     case 'review':
       return <Review />
     default:

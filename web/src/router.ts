@@ -8,6 +8,7 @@ export type Route =
   | { name: 'courses' }
   | { name: 'videos' }
   | { name: 'queue' }
+  | { name: 'gpu' }
   | { name: 'review' }
 
 const PAGES: Record<string, Route> = {
@@ -15,6 +16,7 @@ const PAGES: Record<string, Route> = {
   courses: { name: 'courses' },
   videos: { name: 'videos' },
   queue: { name: 'queue' },
+  gpu: { name: 'gpu' },
 }
 
 function parse(path: string): Route {

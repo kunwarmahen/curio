@@ -313,6 +313,54 @@ export interface QueueStatus {
   in_hours?: boolean
 }
 
+export interface GpuCard {
+  index: number
+  name: string
+  utilization: number | null
+  memory_used_mb: number | null
+  memory_total_mb: number | null
+  temperature_c: number | null
+  power_w: number | null
+  power_limit_w: number | null
+  fan_percent: number | null
+}
+
+export interface GpuProcess {
+  gpu: number
+  pid: number
+  program: string
+  command: string
+  app: string
+  kind: 'compute' | 'graphics' | 'both'
+  memory_mb: number | null
+  utilization: number | null
+  running_s: number | null
+  curio: boolean
+}
+
+export interface OllamaModel {
+  name: string
+  size_mb: number
+  vram_mb: number
+  expires_at: string | null
+  curio_model: boolean
+}
+
+/** Who is using the GPU right now. */
+export interface GpuStatus {
+  checked_at: string
+  nvidia_smi: boolean
+  cards: GpuCard[]
+  processes: GpuProcess[]
+  processes_visible: boolean
+  ollama_reachable: boolean
+  ollama: OllamaModel[]
+  curio_busy: boolean
+  curio_doing: string[]
+  curio_last_model_use: string | null
+  queue_message: string
+}
+
 export type LectureState = 'ready' | 'other_goal' | 'queued' | 'analyzing' | 'failed' | 'missing'
 
 export interface CourseLecture {
@@ -497,6 +545,7 @@ export const api = {
       body: JSON.stringify({ url, preferences, force, queue }),
     }),
   queue: () => request<QueueStatus>('/queue'),
+  gpu: () => request<GpuStatus>('/gpu'),
   defaultPreferences: () => request<Preferences>('/preferences/default'),
   setDefaultPreferences: (preferences: Preferences) =>
     request<Preferences>('/preferences/default', { method: 'PUT', body: JSON.stringify({ preferences }) }),

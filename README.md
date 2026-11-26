@@ -173,6 +173,26 @@ instead** puts them back on the night schedule. (A single video's **Analyze now*
 starts right away and doesn't check the GPU.) The
 container (or `curio api`) has to be running at night for the queue to work.
 
+### Who is using the GPU
+
+The **GPU** page (in the menu) shows what's on the GPU right now and refreshes every
+5 seconds:
+
+- the card: how busy it is, memory used, temperature, power and fan;
+- every program on it, biggest first: its memory, how busy it keeps the GPU, how long
+  it has run, what started it (a service such as Ollama, an app such as VS Code,
+  "Started from VS Code" for a script run in its terminal, or a container), and its
+  command line;
+- the models Ollama has loaded, whether each is one of Curio's, and when Ollama will
+  unload it if nothing uses it. Ollama can't say which program asked for a model;
+- what Curio itself is doing.
+
+Command-line arguments that look like secrets (a token, key, password…) are hidden,
+but the page is open to anyone who can open Curio. In Podman, naming the programs
+needs the host's process list: `curio.sh` shares it whenever the GPU check is on. Set
+`CURIO_GPU_PROCESSES=0` and restart to turn that off; the page then shows only the
+card and Ollama.
+
 ## Courses
 
 Paste a **playlist** link (`youtube.com/playlist?list=…`) on the first page, or use
@@ -317,7 +337,9 @@ Settings go in `.env` (see `.env.example`); the container picks them up on resta
 | `CURIO_WEIGHT_*` | 30/20/20/15/15 | how much educational value, novelty, practical value, depth and relevance count |
 
 For the container: `CURIO_PORT` (`8470`), `CURIO_BIND` (`0.0.0.0`), `CURIO_VOLUME`
-(`curio-data`) and `CURIO_OLLAMA_URL` (Ollama as the container sees it).
+(`curio-data`), `CURIO_OLLAMA_URL` (Ollama as the container sees it), `CURIO_GPU_CHECK`
+(on when the NVIDIA CDI spec exists) and `CURIO_GPU_PROCESSES` (`1`: let the GPU
+page name the programs on the GPU).
 
 ## Good to know
 

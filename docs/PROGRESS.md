@@ -942,6 +942,22 @@ ReAct left and nothing said why.
   the main ideas. Checked at 1280 and 390 px with no page errors and no sideways scroll.
   The buttons weren't pressed, so nothing ran on the GPU.
 
+### Who is using the GPU (2026-11-26)
+- A **GPU** page in the menu shows the card (busy %, memory, temperature, power, fan),
+  every program on the GPU with what started it and its command line (secrets hidden),
+  Ollama's loaded models, and what Curio is doing. It refreshes every 5 s.
+  `GET /api/v1/gpu`, cached for 2 s.
+- Inside the container `nvidia-smi` saw the card but no processes (its own PID
+  namespace). With `--pid=host` a throwaway container of the Curio image listed all of
+  them, with `/proc` cmdlines and cgroups. `curio.sh` now adds it with the GPU check;
+  `CURIO_GPU_PROCESSES=0` turns it off, and the page then says how to turn it on.
+- On this machine it names llama-server under the ollama service (20.5 GB, with
+  qwen3.8-64k loaded), Brave, VS Code, the GNOME desktop, and the aksharallm portal as
+  "Started from VS Code". Ollama can't say which client loaded a model, so the page
+  says so and marks the models Curio uses.
+- Checked in a browser on a test server (1280 and 390 px): no page errors and no
+  sideways scroll; the menu has the new item. 5 new tests (214 in total).
+
 ### Known gaps / next steps
 - The share and swap rule are now swept over two libraries, but both are the same
   sources (CS329Z, Karpathy, 3Blue1Brown) for two goals; a curriculum of unrelated

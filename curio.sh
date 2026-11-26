@@ -25,6 +25,10 @@
 #                       CDI), so the overnight queue waits while the GPU is in use;
 #                       0 = don't (the queue then checks only Ollama). Default: 1 when
 #                       an NVIDIA CDI spec exists (nvidia-ctk cdi generate).
+#   CURIO_GPU_PROCESSES 1 = with the GPU check, also share the host's process list
+#                       (--pid=host) so the GPU page can name the programs using the
+#                       GPU; 0 = don't (the page then shows only the card and Ollama).
+#                       Default: 1.
 # Values in ./.env (API keys, models, weights) are passed to the container.
 set -euo pipefail
 
@@ -115,7 +119,10 @@ gpu_args() {
     want=0
     [[ -f /etc/cdi/nvidia.yaml || -f /var/run/cdi/nvidia.yaml ]] && want=1
   fi
-  [[ "$want" == 1 ]] && printf '%s\n' --device nvidia.com/gpu=all
+  [[ "$want" == 1 ]] || return 0
+  printf '%s\n' --device nvidia.com/gpu=all
+  # The GPU page names the programs on the GPU: it needs the host's /proc.
+  [[ "${CURIO_GPU_PROCESSES:-1}" == 1 ]] && printf '%s\n' --pid=host
   return 0
 }
 

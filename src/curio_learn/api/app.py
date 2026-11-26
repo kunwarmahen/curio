@@ -8,6 +8,7 @@ import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
+from datetime import datetime
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -37,6 +38,7 @@ from curio_learn.domain import (
     VideoAnalysis,
 )
 from curio_learn.errors import CurioError, InvalidURL, Paused
+from curio_learn.gpu import GpuReport, gpu_report
 from curio_learn.logging_setup import configure_logging
 from curio_learn.overnight import LocalGpuProbe, QueueStatus, QueueWorker, Window
 from curio_learn.service import CurioService
@@ -101,6 +103,15 @@ class RetargetRequest(BaseModel):
 
 class RunNowBody(BaseModel):
     analysis_ids: list[str] | None = None  # None: everything waiting
+
+
+class GpuStatus(GpuReport):
+    """The GPU report plus what Curio itself is doing."""
+
+    curio_busy: bool = False
+    curio_doing: list[str] = []  # titles of the videos Curio is analyzing now
+    curio_last_model_use: datetime | None = None  # when Curio's last model job ended
+    queue_message: str = ""
 
 
 class CustomPlaylistBody(BaseModel):
@@ -215,6 +226,34 @@ class Jobs:
         self._executor.shutdown(wait=False, cancel_futures=True)
 
 
+def own_models(service: CurioService) -> set[str]:
+    """The Ollama models Curio uses (its LLM steps and embeddings)."""
+    s = service.settings
+    return {s.model_for(t) for t in ("outline", "evaluate", "notes", "study", "course", "ask")} | {s.embed_model} - {""}
+
+
+class GpuWatch:
+    """The GPU page's report, read at most every 2 s however many pages poll it."""
+
+    def __init__(self, service: CurioService):
+        self.service = service
+        self._lock = threading.Lock()
+        self._last: tuple[float, GpuReport] | None = None
+        self._ollama = None
+        if service.settings.resolved_provider == "ollama" and service.settings.ollama_host:
+            import ollama
+
+            self._ollama = ollama.Client(host=service.settings.ollama_host, timeout=5)
+
+    def report(self) -> GpuReport:
+        with self._lock:
+            if self._last and time.monotonic() - self._last[0] < 2.0:
+                return self._last[1]
+            report = gpu_report(own_models=own_models(self.service), ollama_client=self._ollama)
+            self._last = (time.monotonic(), report)
+            return report
+
+
 def build_queue(service: CurioService, jobs: Jobs) -> QueueWorker:
     s = service.settings
     try:
@@ -224,9 +263,7 @@ def build_queue(service: CurioService, jobs: Jobs) -> QueueWorker:
         window = Window.parse("1-7")
     probe = None
     if s.resolved_provider == "ollama":
-        own = {s.model_for(t) for t in ("outline", "evaluate", "notes", "study", "course", "ask")} | {s.embed_model} - {
-            ""
-        }
+        own = own_models(service)
         probe = LocalGpuProbe(busy_percent=s.queue_gpu_busy_percent, ollama_host=s.ollama_host, own_models=own)
     worker = QueueWorker(
         service.repo,
@@ -642,6 +679,22 @@ def create_app(service: CurioService | None = None) -> FastAPI:
         if not svc(request).remove_queued(analysis_id):
             raise HTTPException(404, {"code": "not_found", "message": "No queued video with this id"})
         return {"removed": analysis_id}
+
+    @app.get("/api/v1/gpu", response_model=GpuStatus)
+    def gpu_status(request: Request):
+        """Who is using the GPU: its cards, the programs on it, Ollama's models, and Curio."""
+        state = request.app.state
+        if getattr(state, "gpu", None) is None:
+            state.gpu = GpuWatch(svc(request))
+        queue = state.queue.status()
+        doing = [i.video.title for i in queue.items if i.status != AnalysisStatus.QUEUED]
+        return GpuStatus(
+            **state.gpu.report().model_dump(),
+            curio_busy=jobs.active(),
+            curio_doing=doing,
+            curio_last_model_use=state.queue.last_own_use,
+            queue_message=queue.message,
+        )
 
     @app.get("/api/v1/videos/recent", response_model=list[RecentVideo])
     def recent(request: Request, limit: int = 10):

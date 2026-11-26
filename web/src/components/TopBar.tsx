@@ -14,6 +14,7 @@ const ITEMS: { path: string; label: string; hint: string; route: Route['name']; 
   { path: '/courses', label: 'Courses', hint: 'Playlists of lectures, as one course', route: 'courses', count: 'courses' },
   { path: '/videos', label: 'Videos', hint: 'Everything you’ve analyzed', route: 'videos' },
   { path: '/queue', label: 'Queue', hint: 'Waiting for tonight', route: 'queue', count: 'queued' },
+  { path: '/gpu', label: 'GPU', hint: 'Who is using it right now', route: 'gpu' },
   { path: '/review', label: 'Review flashcards', hint: 'Cards due today', route: 'review', count: 'due' },
 ]
 
