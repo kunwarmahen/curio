@@ -895,6 +895,20 @@ ReAct left and nothing said why.
   distillation example. Same lengths. Saved playlists change when re-analyzed or
   rebuilt.
 - 1 new test (207 in total).
+- **Live check** (after the restart, 2026-11-26, both rebuilt at 3 hours with the
+  model): CS329Z drops the REST comparison (2.2 min) and shortens the GRPO and
+  distillation part from 12.9 to 10.1 minutes to make room for "Anatomy of an LLM Agent"
+  (84.7), as in the stub run. Lecture 10's evaluation part also starts one section
+  earlier, at "Fundamentals of Agent Evaluation" instead of ending on "Designing Realistic
+  Environments". It stays at 45 parts, now 197.0 minutes instead of 194.7. "Build AI
+  agents" picks the same 47 parts (196.0 minutes) as the first live check, and the plan
+  now records its needs: Karpathy's "What is an LLM?" added for Test-Time Scaling, making
+  room by leaving out Dense Passage Retrieval (Lecture 3) and ReAct (Lecture 6); agent
+  memory and context rot are taught by "The LLM as an Operating System", already in the
+  playlist; none are untaught. In a browser at 1280 and 390 px, the "What builds on
+  what" panel reads "1 part added". Test-Time Scaling shows its "Builds on" fact and
+  Karpathy's part shows "In the playlist because". There were no page errors and no
+  sideways scroll on either course page.
 
 ### Known gaps / next steps
 - The share and swap rule are now swept over two libraries, but both are the same
