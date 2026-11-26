@@ -910,10 +910,40 @@ ReAct left and nothing said why.
   Karpathy's part shows "In the playlist because". There were no page errors and no
   sideways scroll on either course page.
 
+### Run the queue now (2026-11-26)
+- The deep-learning sources for the unrelated-courses check (3Blue1Brown's linear
+  algebra and neural networks, six MIT 6.S191 2026 lectures, and
+  Karpathy's Zero to Hero: 42 videos, 31 hours) were queued at 6:11 AM. That left 49
+  minutes of window: 17 were done at about 3.5 minutes each, and 25 (24.2 hours,
+  mostly Karpathy) wait for tonight.
+- So waiting videos can now be started outside the hours: **Analyze all now** on the
+  Queue page, and **Analyze the N waiting lectures now** on a course. They still run
+  one at a time through the queue worker and wait for an idle GPU, unlike the single
+  video's **Analyze now**. The list is saved in the settings table, so a restart keeps
+  it; **Wait for the queue hours instead** clears it. `POST`/`DELETE /queue/run-now`;
+  `GET /queue` reports `run_now` and `in_hours`.
+- Checked in a browser on a copy of the live database, with the queue worker off (1280
+  and 390 px): a course's 5 waiting lectures read "Started now", the queue shows "The
+  other 20 wait until 1 AM", "all 25" works, and going back to the hours restores
+  the night schedule. No page errors and no sideways scroll.
+- 2 new tests (209 in total).
+- **Ask the course examples** were written for CS329Z ("evaluating agents", "context
+  management") and showed on every course, linear algebra included. They now come from
+  the course itself: the main ideas (or "what matters most for my goal" when the course
+  has one), how a middle lecture builds on the first, ideas that come back across
+  lectures, and where two lectures disagree. With fewer than two analyzed lectures, only
+  the first is shown, and titles too long for a chip fall back to "the later lectures".
+  Checked in a browser on four courses at 1280 and 390 px (for example "How does 'The
+  determinant' build on 'Vectors'?").
+
 ### Known gaps / next steps
 - The share and swap rule are now swept over two libraries, but both are the same
   sources (CS329Z, Karpathy, 3Blue1Brown) for two goals; a curriculum of unrelated
   courses with many outside needs is still untried.
+- On hold: Curio can't find courses itself. It only suggests from the library (the
+  curriculum's suggest step), and the sources for the deep-learning curriculum were
+  picked by hand. Finding playlists for a goal (a yt-dlp search, ranked by the suggest
+  step) would be new work; the hard part is judging quality before anything is analyzed.
 - On hold: the Anthropic provider has not been run against the live API (no credentials
   here); `curio check-claude` checks it with one tiny request.
 - Scores are capped at 100 and ties there fill the top half shortest first. Breaking

@@ -148,6 +148,43 @@ def test_start_now_and_remove(service):
     assert service.get(c).status is AnalysisStatus.QUEUED
 
 
+URL3 = "https://www.youtube.com/watch?v=bbbbbbbbbbb"
+
+
+def test_run_now_skips_the_window_but_not_the_gpu(service):
+    a, _ = service.submit(URL, LearningPreferences(), queue=True)
+    b, _ = service.submit(URL2, LearningPreferences(), queue=True)
+    c, _ = service.submit(URL3, LearningPreferences(), queue=True)
+    w, started = worker(service, now=DAY)
+    assert w.run_now([c, "nope"]) == [c]
+    assert w.status().state == "starting" and w.status().run_now == [c]
+    # Still waits for a free GPU.
+    busy, none = worker(service, now=DAY, probe=FakeProbe("The GPU is in use (80% busy)."))
+    assert busy.tick() is None and not none and busy.status().state == "waiting_gpu"
+    # Only the chosen video runs outside the hours.
+    assert w.tick() == c and started == [c]
+    service.run(c)
+    assert w.tick() is None and started == [c]
+    assert w.status().state == "waiting_window" and w.status().run_now == []
+    # All of them, then back to the hours.
+    assert w.run_now() == [a, b]
+    w.stop_run_now()
+    assert w.tick() is None and w.status().run_now == []
+
+
+def test_run_now_picks_go_first_in_the_hours_and_survive_a_pause(service):
+    a, _ = service.submit(URL, LearningPreferences(), queue=True)
+    b, _ = service.submit(URL2, LearningPreferences(), queue=True)
+    w, started = worker(service)
+    w.run_now([b])
+    assert w.tick() == b
+    # Paused for the GPU, it goes back to waiting and is still the learner's pick.
+    service.repo.requeue(b, "Paused")
+    assert w.status().run_now == [b]
+    w2, started2 = worker(service, now=DAY)
+    assert w2.tick() == b and started2 == [b]
+
+
 def test_api_queue_flow(service):
     with TestClient(create_app(service)) as client:
         r = client.post("/api/v1/analyses", json={"url": URL, "queue": True})
@@ -170,6 +207,11 @@ def test_api_queue_flow(service):
         assert body["status"] == "done", body.get("error")
         assert client.post(f"/api/v1/queue/{analysis_id}/start").status_code == 400
         assert client.post("/api/v1/queue/nope/start").status_code == 404
+        later = client.post("/api/v1/analyses", json={"url": URL2, "queue": True}).json()["analysis_id"]
+        r = client.post("/api/v1/queue/run-now", json={})
+        assert r.status_code == 200 and r.json()["run_now"] == [later]
+        assert client.delete("/api/v1/queue/run-now").json()["run_now"] == []
+        assert client.delete(f"/api/v1/queue/{later}").status_code == 200
         assert client.get("/api/v1/queue").json()["state"] == "empty"
 
 

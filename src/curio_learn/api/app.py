@@ -99,6 +99,10 @@ class RetargetRequest(BaseModel):
     save_default: bool = True
 
 
+class RunNowBody(BaseModel):
+    analysis_ids: list[str] | None = None  # None: everything waiting
+
+
 class CustomPlaylistBody(BaseModel):
     segment_ids: list[str] | None = None  # None: back to Curio's picks
 
@@ -607,6 +611,21 @@ def create_app(service: CurioService | None = None) -> FastAPI:
     @app.get("/api/v1/queue", response_model=QueueStatus)
     def queue_status(request: Request):
         return request.app.state.queue.status()
+
+    # Before the /queue/{analysis_id} routes, so "run-now" isn't read as an id.
+    @app.post("/api/v1/queue/run-now", response_model=QueueStatus)
+    def queue_run_now(body: RunNowBody, request: Request):
+        """Run these waiting videos (or all) now, one at a time, when the GPU is free."""
+        worker = request.app.state.queue
+        worker.run_now(body.analysis_ids)
+        return worker.status()
+
+    @app.delete("/api/v1/queue/run-now", response_model=QueueStatus)
+    def queue_stop_run_now(request: Request):
+        """Back to the queue hours for everything still waiting."""
+        worker = request.app.state.queue
+        worker.stop_run_now()
+        return worker.status()
 
     @app.post("/api/v1/queue/{analysis_id}/start", status_code=202, response_model=AnalyzeAccepted)
     def queue_start(analysis_id: str, request: Request):

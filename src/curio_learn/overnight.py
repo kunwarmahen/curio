@@ -8,6 +8,10 @@ worker checks every `queue_check_s` seconds and starts the oldest one when
 - the GPU is idle: utilization below `CURIO_QUEUE_GPU_BUSY_PERCENT` (read with
   nvidia-smi when it's available) and no Ollama model loaded by something else.
 
+Videos the learner starts now (`run_now`, all of them or a chosen few) skip the
+window but not the other two checks: they still run one at a time and wait for an idle
+GPU. The list is kept in the settings table, so a restart doesn't forget it.
+
 One analysis runs at a time. The conditions are checked before each start, so an
 analysis that is running when the window closes finishes, but no new one starts.
 After each analysis the job also writes playlist notes and a quiz (`queue_prepare`),
@@ -36,6 +40,8 @@ from pydantic import BaseModel
 from curio_learn.domain import AnalysisStatus, LearningPreferences, VideoMetadata
 
 log = logging.getLogger(__name__)
+
+RUN_NOW_KEY = "queue_run_now"
 
 # Curio's own Ollama calls keep their model loaded this long (keep_alive is 10m).
 OWN_USE_GRACE = timedelta(minutes=15)
@@ -175,6 +181,9 @@ class QueueStatus(BaseModel):
     message: str
     next_start: datetime | None = None
     items: list[QueueItem] = []
+    # Waiting videos the learner started now: they skip the window, in this order.
+    run_now: list[str] = []
+    in_hours: bool = True  # whether it's inside the queue hours now
 
 
 class QueueWorker:
@@ -212,14 +221,50 @@ class QueueWorker:
     def _own_recent_use(self) -> bool:
         return self.last_own_use is not None and self.now() - self.last_own_use < OWN_USE_GRACE
 
+    # ----------------------------------------------------------- run now
+
+    def run_now(self, analysis_ids: list[str] | None = None) -> list[str]:
+        """Start these waiting videos (None: all of them) without waiting for the window,
+        one at a time when the GPU is free. Returns every video now set to run."""
+        with self._lock:
+            queued = self.repo.queued_ids()
+            chosen = queued if analysis_ids is None else [i for i in analysis_ids if i in set(queued)]
+            # Keep earlier picks that are still waiting or running (one may pause and wait again).
+            ids = self._run_now_ids([x["analysis_id"] for x in self.repo.queue_items()])
+            ids += [i for i in chosen if i not in ids]
+            self._save_run_now(ids)
+            return ids
+
+    def stop_run_now(self) -> None:
+        """Back to the queue hours for everything still waiting."""
+        with self._lock:
+            self._save_run_now([])
+
+    def _run_now_ids(self, queued: list[str]) -> list[str]:
+        saved = (self.repo.get_setting(RUN_NOW_KEY) or {}).get("ids", [])
+        waiting = set(queued)
+        return [i for i in saved if i in waiting]
+
+    def _save_run_now(self, ids: list[str]) -> None:
+        self.repo.set_setting(RUN_NOW_KEY, {"ids": ids})
+
     def tick(self) -> str | None:
         """Start the next queued analysis if everything allows it. Returns its id."""
         with self._lock:
             queued = self.repo.queued_ids()
             if not queued or self.active():
                 return None
+            now_ids = self._run_now_ids(queued)
+            # A started video stays on the list while it runs, so one that pauses for the
+            # GPU comes back to it; the list is cleared once none of it is waiting.
+            if not now_ids and (self.repo.get_setting(RUN_NOW_KEY) or {}).get("ids"):
+                self._save_run_now([])
             if self.window and not self.window.contains(self.now().time()):
-                return None
+                queued = now_ids  # outside the hours only what the learner started runs
+                if not queued:
+                    return None
+            else:  # inside them, the learner's picks still go first
+                queued = now_ids + [i for i in queued if i not in now_ids]
             reason = self.probe.busy_reason(own_recent_use=self._own_recent_use()) if self.probe else ""
             if reason and reason.split("(")[0] != self._gpu_reason.split("(")[0]:
                 log.info("Queue waiting: %s", reason)  # once per kind of reason, not every check
@@ -246,10 +291,13 @@ class QueueWorker:
             "window_end": w.end.strftime("%H:%M") if w else "",
             "items": items,
         }
-        if not any(i.status == AnalysisStatus.QUEUED for i in items):
+        waiting = [i.analysis_id for i in items if i.status == AnalysisStatus.QUEUED]
+        if not waiting:
             return QueueStatus(**base, state="empty", message="Nothing is waiting in the queue.")
+        base["run_now"] = self._run_now_ids(waiting)
         now = self.now()
-        if w and not w.contains(now.time()):
+        base["in_hours"] = not w or w.contains(now.time())
+        if not base["in_hours"] and not base["run_now"]:
             nxt = w.next_start(now)
             return QueueStatus(**base, state="waiting_window", message="Waiting for the queue hours.", next_start=nxt)
         if self.active():

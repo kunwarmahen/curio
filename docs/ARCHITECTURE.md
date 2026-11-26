@@ -184,7 +184,9 @@ invent a timestamp: code converts the numbers to the original cue times.
 | `GET`  | `/health` | `{status, llm_provider, model}` |
 | `POST` | `/analyses` | `{url, preferences, force?, queue?}` → `202 {analysis_id, status}`; runs in background, or with `queue` waits in the overnight queue (`status: queued`). Returns the cached, queued or running analysis if one exists for the same video + preferences + model; without `queue`, a matching queued one is started now. |
 | `GET`  | `/analyses/{id}` | `VideoAnalysis` (with `status`: `queued`/`pending`/`running`/`done`/`failed`, `progress` message, `error`) |
-| `GET`  | `/queue` | `QueueStatus`: `window_start`/`window_end` (local `HH:MM`), `state` (`empty`, `busy`, `waiting_window`, `waiting_gpu`, `starting`), `message`, `next_start`, `items[]` (running first, then queued oldest first) |
+| `GET`  | `/queue` | `QueueStatus`: `window_start`/`window_end` (local `HH:MM`), `state` (`empty`, `busy`, `waiting_window`, `waiting_gpu`, `starting`), `message`, `next_start`, `items[]` (running first, then queued oldest first), `run_now[]` (waiting ids the learner started now), `in_hours` |
+| `POST` | `/queue/run-now` | `{analysis_ids?}` → `QueueStatus`: run these waiting videos (all when no ids) now, skipping the queue hours but not the GPU check |
+| `DELETE` | `/queue/run-now` | back to the queue hours for everything waiting → `QueueStatus` |
 | `POST` | `/queue/{id}/start` | start a queued analysis now → `202` (`400` if it isn't queued any more) |
 | `DELETE` | `/queue/{id}` | remove a queued analysis |
 | `GET`  | `/videos/recent?limit=10` | `[ {video, analysis_id, profile, analyzed_at, playlist_s, watch_map[]} ]` |
@@ -419,6 +421,16 @@ when all of these hold:
      `CURIO_QUEUE_GPU_BUSY_PERCENT` (20). Measured on the dev machine: an idle
      GNOME desktop reads 0–5% with spikes to about 30%; a training job reads 88–90%.
      Without `nvidia-smi` this check is skipped.
+
+**Run now.** The learner can start waiting videos outside the hours (all of them,
+or a course's waiting lectures). Their ids are kept in the `settings` table
+(`queue_run_now`), so a restart keeps them. A tick outside the hours considers only
+those ids; inside the hours they go first. Conditions 1 and 3 still apply, so they
+run one at a time and wait for an idle GPU. An id stays on the list while it runs, so
+a video that pauses for the GPU and goes back to `queued` is still the learner's pick.
+The list is cleared on the first tick that finds none of it waiting and Curio idle.
+The per-video `POST /queue/{id}/start` is different: it runs at once on the job
+executor, with no GPU check.
 
 The conditions are checked before each start, so a run started at 6:55 finishes
 after 7:00, and a GPU job started at night pauses the queue before the next video.

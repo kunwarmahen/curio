@@ -308,6 +308,9 @@ export interface QueueStatus {
   message: string
   next_start: string | null
   items: QueueItem[]
+  /** Waiting videos the learner started now: they skip the queue hours, in this order. */
+  run_now?: string[]
+  in_hours?: boolean
 }
 
 export type LectureState = 'ready' | 'other_goal' | 'queued' | 'analyzing' | 'failed' | 'missing'
@@ -504,6 +507,10 @@ export const api = {
     }),
   queueStart: (id: string) =>
     request<{ analysis_id: string; status: Status }>(`/queue/${encodeURIComponent(id)}/start`, { method: 'POST' }),
+  /** Run these waiting videos (or all, with no ids) now, one at a time when the GPU is free. */
+  queueRunNow: (ids?: string[]) =>
+    request<QueueStatus>('/queue/run-now', { method: 'POST', body: JSON.stringify({ analysis_ids: ids ?? null }) }),
+  queueStopRunNow: () => request<QueueStatus>('/queue/run-now', { method: 'DELETE' }),
   queueRemove: (id: string) => request<{ removed: string }>(`/queue/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   analysis: (id: string) => request<Analysis>(`/analyses/${encodeURIComponent(id)}`),
   customPlaylist: (id: string) =>

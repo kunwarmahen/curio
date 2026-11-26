@@ -1037,6 +1037,23 @@ function CourseAsk(props: { course: Course; citation: (c: Citation) => React.Rea
     [id],
   )
   const goal = course.preferences.custom_objective
+  // Drawn from this course's own lectures, so they fit any subject.
+  const suggestions = useMemo(() => {
+    const done = course.lectures.filter((l) => l.analysis_id)
+    const out = [goal ? 'What in the course matters most for my goal?' : 'What are the main ideas of the course?']
+    if (done.length >= 2) {
+      const first = shortTitle(done[0].title)
+      const later = shortTitle(done[Math.min(done.length - 1, Math.max(1, Math.floor(done.length / 2)))].title)
+      out.push(
+        first.length + later.length <= 90
+          ? `How does “${later}” build on “${first}”?`
+          : 'How do the later lectures build on the first ones?',
+      )
+      out.push('Which ideas come back in more than one lecture?')
+      out.push('Where do two lectures disagree or give different advice?')
+    }
+    return out
+  }, [course.lectures, goal])
   return (
     <section className="course__section" aria-labelledby="ask-course-heading">
       <h2 id="ask-course-heading" className={props.inTab ? 'visually-hidden' : undefined}>
@@ -1046,12 +1063,7 @@ function CourseAsk(props: { course: Course; citation: (c: Citation) => React.Rea
         subject="course"
         intro={`Ask anything about the course. Curio searches all ${analyzed} analyzed lectures and answers from their transcripts, citing the moment in each lecture. Name a lecture ("in lecture 6…") to look there first.`}
         waiting="Searching every lecture and reading what it found… This takes up to a minute with a local model."
-        suggestions={[
-          'Which lectures talk about evaluating agents, and what do they warn about?',
-          'What does the course say about context management, across lectures?',
-          goal ? 'What would someone who has built agents most likely have missed here?' : 'What are the main ideas of the course?',
-          'Where do two lectures disagree or give different advice?',
-        ]}
+        suggestions={suggestions}
         load={load}
         send={(q) => api.askCourse(id, q).then((a) => ({ ...a, covered: a.in_course }))}
         clear={() => api.clearCourseConversation(id)}
@@ -1304,6 +1316,20 @@ const STATE_LABEL: Record<CourseLecture['state'], string> = {
 function Lectures({ course, onChange, inTab }: { course: Course; onChange: () => void; inTab?: boolean }) {
   const [busy, setBusy] = useState('')
   const [err, setErr] = useState('')
+  // Which waiting lectures were started now (they skip the queue hours).
+  const waitingIds = course.lectures
+    .filter((l) => l.pending_id && (l.state === 'queued' || l.state === 'other_goal'))
+    .map((l) => l.pending_id!)
+  const waitingKey = waitingIds.join(',')
+  const [runNow, setRunNow] = useState<{ ids: Set<string>; outside: boolean }>({ ids: new Set(), outside: false })
+  useEffect(() => {
+    if (!waitingKey) return
+    api
+      .queue()
+      .then((q) => setRunNow({ ids: new Set(q.run_now ?? []), outside: q.in_hours === false }))
+      .catch(() => {})
+  }, [waitingKey, busy])
+  const notStarted = waitingIds.filter((id) => !runNow.ids.has(id))
 
   const act = async (key: string, fn: () => Promise<unknown>) => {
     setBusy(key)
@@ -1353,6 +1379,23 @@ function Lectures({ course, onChange, inTab }: { course: Course; onChange: () =>
           {err}
         </p>
       )}
+      {runNow.outside && notStarted.length > 0 && (
+        <div className="queue__retarget">
+          <button
+            type="button"
+            className="button-quiet"
+            disabled={!!busy}
+            onClick={() => act('run-now', () => api.queueRunNow(notStarted))}
+          >
+            {busy === 'run-now'
+              ? 'Starting…'
+              : notStarted.length === 1
+                ? 'Analyze the waiting lecture now'
+                : `Analyze the ${notStarted.length} waiting lectures now`}
+          </button>
+          <span className="hint">One at a time, each when the GPU is free, without waiting for tonight.</span>
+        </div>
+      )}
       <ol className="lectures">
         {course.lectures.map((l, i) => (
           <li key={l.video_id} className="lecture">
@@ -1387,7 +1430,11 @@ function Lectures({ course, onChange, inTab }: { course: Course; onChange: () =>
               )}
               <span className="muted">
                 {l.duration_s > 0 && `${duration(l.duration_s)}. `}
-                <span className={`lecture__state lecture__state--${l.state}`}>{STATE_LABEL[l.state]}</span>
+                <span className={`lecture__state lecture__state--${l.state}`}>
+                  {l.state === 'queued' && runNow.outside && runNow.ids.has(l.pending_id ?? '')
+                    ? 'Started now: runs when the GPU is free'
+                    : STATE_LABEL[l.state]}
+                </span>
                 {l.state === 'other_goal' && l.pending_id && '; queued again for the course goal'}
                 {l.error && `: ${l.error}`}
               </span>

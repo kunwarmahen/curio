@@ -163,7 +163,14 @@ analysis never competes with your own GPU work:
   playlist, so they're ready in the morning.
 
 The **Queue** page (in the menu) shows what's waiting and why it's waiting. You can
-start a video now, remove it, or give every waiting video your current goal. The
+start a video now, remove it, or give every waiting video your current goal.
+
+Outside the queue hours, **Analyze all now** runs everything waiting without waiting
+for the night. A course page does the same for just that course's waiting lectures.
+They still run one at a time, each when the GPU is free, so starting them is safe
+while you train: they wait until the GPU is idle. **Wait for the queue hours
+instead** puts them back on the night schedule. (A single video's **Analyze now**
+starts right away and doesn't check the GPU.) The
 container (or `curio api`) has to be running at night for the queue to work.
 
 ## Courses
@@ -200,7 +207,7 @@ overnight, the playlist is rebuilt by itself.
   minute per lecture with a local model.
 - **Ask the course**: questions answered from every lecture at once, saying which
   lecture says what. Name a lecture ("in lecture 6…", "the guest lecture") to look
-  there first.
+  there first. The example questions use the course's own lecture titles.
 - **Repeats**: every pair of similar sections Curio compared across lectures, and
   whether it judged them a repeat (watch one), an overlap (each adds something) or
   different, with why.

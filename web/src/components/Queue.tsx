@@ -6,6 +6,16 @@ import { linkProps, navigate } from '../router'
 /** What the queue is waiting for, in a sentence. */
 function stateLine(q: QueueStatus): string {
   const hours = queueHours(q.window_start, q.window_end)
+  const now = q.run_now?.length ?? 0
+  if (now && q.in_hours === false) {
+    const waiting = q.items.filter((i) => i.status === 'queued').length
+    const rest = waiting - now
+    const started =
+      now === waiting
+        ? `You started ${now === 1 ? 'this video' : `all ${now}`} now: Curio analyzes them one at a time when the GPU is free.`
+        : `You started ${now} now: Curio analyzes them one at a time when the GPU is free. The other ${rest} wait until ${localTime(q.window_start)}.`
+    return q.state === 'waiting_gpu' ? `${started} ${q.message}` : started
+  }
   switch (q.state) {
     case 'waiting_window':
       return `Curio analyzes these one at a time ${hours}, when the GPU is free. The first starts at ${localTime(
@@ -45,6 +55,22 @@ export function QueueList(props: { queue: QueueStatus; onChange: () => void; goa
   const waitingItems = queue.items.filter((i) => i.status === 'queued')
   const waiting = waitingItems.length
   const differ = waitingItems.filter((i) => !sameGoal(i.preferences, goal)).length
+  const runNow = new Set(queue.run_now ?? [])
+  const outside = queue.in_hours === false
+  const notStarted = waitingItems.filter((i) => !runNow.has(i.analysis_id)).length
+
+  const startAll = async (stop = false) => {
+    setBusy('now')
+    setErr('')
+    try {
+      await (stop ? api.queueStopRunNow() : api.queueRunNow())
+      onChange()
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : 'That didn’t work. Try again.')
+    } finally {
+      setBusy('')
+    }
+  }
 
   const retarget = async () => {
     setBusy('all')
@@ -87,6 +113,25 @@ export function QueueList(props: { queue: QueueStatus; onChange: () => void; goa
     <section className="recent queue" aria-labelledby="queue-heading">
       <h2 id="queue-heading">{waiting ? `Waiting (${waiting})` : 'Analyzing now'}</h2>
       {waiting > 0 && <p className="muted queue__state">{stateLine(queue)}</p>}
+      {waiting > 0 && outside && (
+        <div className="queue__retarget">
+          {notStarted > 0 && (
+            <button type="button" className="button-quiet" onClick={() => startAll()} disabled={!!busy}>
+              {busy === 'now'
+                ? 'Starting…'
+                : notStarted === waiting
+                  ? `Analyze ${waiting === 1 ? 'it' : `all ${waiting}`} now`
+                  : `Analyze the other ${notStarted} now too`}
+            </button>
+          )}
+          {runNow.size > 0 && (
+            <button type="button" className="button-quiet" onClick={() => startAll(true)} disabled={!!busy}>
+              Wait for the queue hours instead
+            </button>
+          )}
+          <span className="hint">One at a time, each when the GPU is free.</span>
+        </div>
+      )}
       {differ > 0 && (
         <div className="queue__retarget">
           <button type="button" className="button-quiet" onClick={retarget} disabled={!!busy}>
@@ -123,7 +168,9 @@ export function QueueList(props: { queue: QueueStatus; onChange: () => void; goa
                   {item.status === 'queued'
                     ? item.progress.startsWith('Paused')
                       ? `${item.progress} It starts over when the GPU is free.`
-                      : 'Waiting'
+                      : runNow.has(item.analysis_id) && outside
+                        ? 'Started now: runs when the GPU is free'
+                        : 'Waiting'
                     : `Analyzing${item.progress ? `: ${item.progress}` : ''}`}
                 </span>
               </div>
