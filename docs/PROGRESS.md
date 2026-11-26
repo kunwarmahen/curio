@@ -994,6 +994,8 @@ ReAct left and nothing said why.
   non-graphics programs. It now names whoever holds over 1 GB and, separately, the
   busiest program in pmon's sample. When neither applies it says "No program stands
   out."
+  Live after the restart (7:58 AM): the GPU was 12% busy (Brave 797 MB, 12%), no
+  model was loaded, and the line reads "Mostly idle."; no errors at 1280 and 390 px.
 
 ### Known gaps / next steps
 - The share and swap rule are now swept over two libraries, but both are the same
