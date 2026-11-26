@@ -24,7 +24,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from curio_learn.analysis import prompts
 from curio_learn.analysis.curriculum import Placed, Similar, Source, order_sections, outside_needs
@@ -98,7 +98,10 @@ class ChecklistPointOut(BaseModel):
 
 
 class ChecklistOut(BaseModel):
-    points: list[ChecklistPointOut]
+    # Capped in the schema only: on a long course the model writes points past the 8 to 12
+    # the prompt asks for until the output runs out and the JSON is cut off. Not validated,
+    # so a provider that ignores the cap still gives a checklist (the first 12 are kept).
+    points: list[ChecklistPointOut] = Field(json_schema_extra={"maxItems": 12})
 
 
 @dataclass

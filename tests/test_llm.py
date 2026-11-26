@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import pytest
 from pydantic import BaseModel
 
+from curio_learn.analysis.course import ChecklistOut
 from curio_learn.analysis.evaluate import EvaluationOut
 from curio_learn.analysis.outline import OutlineOut
 from curio_learn.errors import LLMError
@@ -75,6 +76,14 @@ def test_strict_schema_is_flat_and_closed():
 def test_anthropic_schema_accepted_by_sdk_transform():
     schema = AnthropicProvider(client=object()).schema_for(EvaluationOut)
     assert schema["type"] == "object" and schema["additionalProperties"] is False
+
+
+def test_checklist_is_capped_in_the_schema_not_in_validation():
+    # On a long course the model wrote ~24 points and ran out of output mid-JSON.
+    assert strict_object_schema(ChecklistOut)["properties"]["points"]["maxItems"] == 12
+    AnthropicProvider(client=object()).schema_for(ChecklistOut)  # the SDK accepts the cap
+    point = {"text": "a", "why": "b", "sections": ["L1.S01"]}
+    assert len(ChecklistOut.model_validate({"points": [point] * 15}).points) == 15  # kept, first 12 used
 
 
 class _FakeStream:

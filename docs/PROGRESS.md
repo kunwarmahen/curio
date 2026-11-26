@@ -997,7 +997,31 @@ ReAct left and nothing said why.
   Live after the restart (7:58 AM): the GPU was 12% busy (Brave 797 MB, 12%), no
   model was loaded, and the line reads "Mostly idle."; no errors at 1280 and 390 px.
 
+### Deep learning from the math up (2026-11-26)
+- The 42 videos (3Blue1Brown linear algebra 16 and neural networks 10, Karpathy Zero
+  to Hero 10, six MIT 6.S191 2026 lectures) finished analyzing at 10:00. The
+  curriculum "Deep learning from the math up" was built from them on a copy of the
+  database at 1, 2 and 3 hours in both orders, and added to the live app (7307f0ccb6fb,
+  not built there).
+- Results: 20, 33 and 44 parts; 65.1, 130.5 and 197.1 min (about 9% over, as before);
+  16, 22 and 27 of 42 lectures used. Needs: 1–3 met in every build; an untaught one
+  ("solving quadratic equations", matched to a derivatives section) was rightly not
+  swapped in. Section order gave the same parts in the same order as lecture order:
+  every need already points to an earlier source, so nothing moves.
+- **The checklist failed in all six builds**: the model wrote about 24 points (the
+  prompt asks for 8–12), hit `num_predict=2500` and the JSON was cut off. The schema
+  now caps the list at 12. Rebuilt at 1 hour: 12 points, no warnings, the call took
+  46 s. It shared the GPU with another app, so the whole build took 81 min.
+- **The picks are weak for this goal** (see Known gaps): the 1-hour playlist has no
+  gradient descent and no backpropagation lecture, but has Cramer's rule, "Registering
+  custom functions in PyTorch" and "Fixing the zero_grad bug". 11 of 12 checklist
+  points cite sections the playlist left out.
+
 ### Known gaps / next steps
+- A curriculum picks by each video's own scores, and its goal isn't used. Scores rank
+  sections within one lecture, so 42 lectures gave 173 "essential" sections and the
+  packing can't tell the core ideas (gradient descent, backpropagation) from side
+  topics. A goal-aware pass across the sources would be new work.
 - The share and swap rule are now swept over two libraries, but both are the same
   sources (CS329Z, Karpathy, 3Blue1Brown) for two goals; a curriculum of unrelated
   courses with many outside needs is still untried.

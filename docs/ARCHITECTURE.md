@@ -630,7 +630,10 @@ with the same inputs and model is reused, and `plan_stale` says lectures changed
 5. Checklist: the course outline (ids like `L3.S05`, title, summary, concepts;
    summaries of weaker sections are dropped if it doesn't fit the context) and the
    learner brief. 8–12 points, each citing sections; points without a real section
-   are dropped, and each says whether its sections are in the course playlist.
+   are dropped, and each says whether its sections are in the course playlist. The
+   schema caps the list at 12 (`maxItems`, not validated; the first 12 are kept): on
+   a 42-lecture curriculum the model wrote about 24 points and ran past its 2,500
+   output tokens mid-JSON.
 
 On CS329Z (7 lectures, 9 h 9 min, qwen3.8 27B): 28 pairs judged in 3 calls and the
 checklist in one, 1.5–2 minutes in all. A 90-minute budget gave 19 parts (1 h 38
