@@ -935,6 +935,12 @@ ReAct left and nothing said why.
   the first is shown, and titles too long for a chip fall back to "the later lectures".
   Checked in a browser on four courses at 1280 and 390 px (for example "How does 'The
   determinant' build on 'Vectors'?").
+- **Live check** (after the restart, 7:31 AM): `GET /queue` reports `in_hours: false`
+  and an empty `run_now`. The Queue page offers "Analyze all 24 now". Linear algebra
+  offers "Analyze the 4 waiting lectures now" and Neural networks offers 10. The Ask
+  examples follow each course; Neural networks, with one analyzed lecture, shows only
+  the main ideas. Checked at 1280 and 390 px with no page errors and no sideways scroll.
+  The buttons weren't pressed, so nothing ran on the GPU.
 
 ### Known gaps / next steps
 - The share and swap rule are now swept over two libraries, but both are the same
