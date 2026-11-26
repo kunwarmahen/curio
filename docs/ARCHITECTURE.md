@@ -706,8 +706,34 @@ so one analyzed for another goal isn't queued again).
   plan on screen was built section by section (`custom_course_parts(by_section=…)`).
 - **Needs as prerequisites:** in both modes, a teaching section another course needs
   joins the needing section's `builds_on`, so the selector adds it when it fits (and it
-  plays first). A plan only orders what it holds: when the teaching section doesn't
-  fit, nothing moves.
+  plays first). A plan only orders what it holds, so after the selection
+  `cover_needs` (`analysis/playlist.py`) makes sure each chosen section's outside need is
+  taught: for a need no chosen section teaches, the shortest teacher goes in, in the
+  time left when it fits, else in place of the picks worth least per minute
+  (`_pick_value` / cost), as long as they're worth less than the teacher and the section it serves
+  together, and within `need_share` (10%) of the playlist across all swaps. Pins,
+  teachers already serving a need and the sections they serve are never swapped out;
+  needs go best section first. Whole lectures play in source order, so there only a
+  teacher from an *earlier* source counts; section by section, any teacher does (it
+  moves ahead). A need still untaught becomes a plan warning naming the section, the
+  need and where it's taught (at most three lines). Before this, a teacher went in
+  only as a `builds_on` prerequisite that fit the time left, and a source placed late
+  by hand stayed late. First tries, on the curriculum test library with Karpathy put
+  last by hand (3 hours, section by section): dropping the picks worth least overall
+  freed too little time (they are the short ones) and left Lecture 2's "LLM inference"
+  untaught; comparing the loss with the needing section alone, not the teacher too,
+  did the same. Result: Karpathy's "What is an LLM", "Demo: Tool Use" and "The LLM as
+  an Operating System" play after Lecture 1's first part, with 3Blue1Brown's "Series
+  scope" just before them, for Lecture 1's Reflexion lead-in, Lecture 6's ReAct and
+  3.7 minutes of Karpathy's security part. In Curio's own order, whole lectures, it
+  adds Karpathy's "What is an LLM" (which Lecture 2's test-time scaling needs) and its
+  LLM OS section.
+- **A teacher brings its own teachers along:** `order_sections` keeps an edge from
+  every chosen teacher to the chosen section that needs it, even when the teacher
+  already comes first. Before, an edge was kept only when the teacher came later, so
+  a section pulled ahead of a third source left its own teacher behind (Karpathy's
+  "What is an LLM", moved up for CS329Z, played before 3Blue1Brown's neural
+  networks).
 - Calibration library, offline (a stub model, so no repeats or checklist): CS329Z +
   Karpathy + 3Blue1Brown given last + algorithms + sleep → Lecture 1, Karpathy,
   Lectures 2–4, 3Blue1Brown, Lectures 5–9, guest lecture, then sleep and algorithms;

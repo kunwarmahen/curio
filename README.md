@@ -232,6 +232,12 @@ curriculum**.
 - **Section by section**: sections from different lectures interleave when one needs
   what another teaches. Each course still keeps its order.
 
+In either order, when a section in your playlist builds on something another source
+teaches, the section that teaches it goes in too, even if a slightly weaker pick has
+to make room (never one you pinned, and never more than about a tenth of the
+playlist). If it still doesn't fit your length, the playlist's **things to know**
+list says which section builds on what, and where that's taught.
+
 A new curriculum has no playlist yet: press **Build the course playlist** on its page.
 Every build first puts the lectures in order. You can switch the order on the
 curriculum's page any time, then press **Build again with this length**.

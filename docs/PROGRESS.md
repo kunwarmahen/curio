@@ -806,10 +806,38 @@ gone, same order). 1 new test (200 in total).
   app's job worker built the same plan, and the worker's run could leave it "running".
   It now waits for the worker. 200 tests.
 
+### Needed sections make room (2026-11-25)
+Section by section only reordered what the playlist held, so with Karpathy put last by
+hand in a 3-hour playlist, nothing moved.
+- **`cover_needs`:** after the selection, a chosen section whose need from another
+  source no chosen section teaches gets the shortest teacher: in the time left, or in
+  place of the picks worth least per minute when they're worth less than the teacher and
+  the section it serves, within 10% of the playlist (`need_share`). Pins and sections
+  already serving a need are never swapped out. Whole lectures accept only a teacher
+  from an earlier source (it can't move); section by section, any. An untaught need
+  becomes a plan warning ("Lecture 2, “Test-Time Scaling…”, builds on “Basic
+  understanding of LLM inference”, which … teaches …; it didn't fit this length").
+- **Two first tries failed** on the test library: dropping the picks worth least
+  overall (the short ones, freeing little time) and weighing the loss against the
+  needing section alone both left Lecture 2's "LLM inference" untaught.
+- **An ordering bug found on the way:** `order_sections` kept a teacher's edge only
+  when the teacher came later, so a section pulled ahead (Karpathy's "What is an LLM")
+  left its own teacher (3Blue1Brown's "Series scope") behind. Every chosen teacher's
+  edge is kept now.
+- **Result** (test library copy, stub model, cached phrase vectors only; GPU was busy):
+  Karpathy last, section by section: "Series scope", then Karpathy's "What is an LLM",
+  "Demo: Tool Use" and "The LLM as an Operating System" play after Lecture 1's first
+  part; all four needs of chosen sections are taught; 196 of 198 minutes. It cost
+  Lecture 1's Reflexion lead-in, Lecture 6's ReAct (a repeat of Lecture 1's) and 3.7
+  minutes of Karpathy's security part. In Curio's own order with whole lectures, it adds
+  Karpathy's "What is an LLM" and LLM OS sections, which Lecture 2 needs.
+- 5 new tests (205 in total).
+
 ### Known gaps / next steps
-- Section by section only reorders what the playlist holds: when the section that
-  teaches a need doesn't fit the time, nothing moves (seen with Karpathy put last by
-  hand in a 3-hour playlist).
+- Untaught needs are listed as warnings but not on the curriculum's "Why this order"
+  panel; a section-level "why it's here" for added teachers would explain the swaps.
+- The 10% need share and the swap rule (loss < teacher + the section it serves) were
+  set on one library; a curriculum with many outside needs may want a different share.
 - The Anthropic provider has not been run against the live API (no credentials
   here); `curio check-claude` checks it with one tiny request.
 - Scores are capped at 100, so with the beginner foundation bonus several top sections

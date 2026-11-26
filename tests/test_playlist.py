@@ -1,6 +1,13 @@
 import pytest
 
-from curio_learn.analysis.playlist import PlaylistConfig, build_playlist, compute_budget, select_sections
+from curio_learn.analysis.playlist import (
+    OutsideNeed,
+    PlaylistConfig,
+    build_playlist,
+    compute_budget,
+    cover_needs,
+    select_sections,
+)
 from curio_learn.analysis.validation import validate
 from curio_learn.domain import (
     Block,
@@ -255,3 +262,41 @@ def test_top_sections_fill_at_most_half_the_playlist_and_skip_repeats():
     excludes = {"S00": {"S01"}, "S01": {"S00"}}
     chosen = select_sections([*tops, *rest], budget_s=20 * 60, config=CFG, excludes=excludes)
     assert "S00" in chosen and "S01" not in chosen
+
+
+def test_a_needed_teacher_that_fits_goes_in():
+    secs = [scored(0, 90, dur=600), scored(1, 60, dur=120)]
+    need = OutsideNeed(section_id="S00", prerequisite="LLMs", teachers=["S01"])
+    chosen, untaught = cover_needs(secs, {"S00"}, 800, PlaylistConfig(), [need])
+    assert chosen == {"S00", "S01"} and untaught == []
+
+
+def test_a_needed_teacher_swaps_out_weaker_picks_within_its_share():
+    # 30 minutes, full: the teacher (2 min) replaces the weakest pick.
+    secs = [scored(0, 95, dur=900), scored(1, 70, dur=540), scored(2, 50, dur=540), scored(3, 60, dur=120)]
+    need = OutsideNeed(section_id="S00", prerequisite="LLMs", teachers=["S03"])
+    chosen, untaught = cover_needs(secs, {"S00", "S01", "S02"}, 1800, PlaylistConfig(), [need])
+    assert chosen == {"S00", "S01", "S03"} and untaught == []
+
+
+def test_a_needed_teacher_never_displaces_pins_or_more_than_the_need_is_worth():
+    secs = [scored(0, 60, dur=900), scored(1, 95, dur=900), scored(3, 60, dur=120)]
+    need = OutsideNeed(section_id="S00", prerequisite="LLMs", teachers=["S03"])
+    # The only other pick is worth more than the section that needs the teacher.
+    chosen, untaught = cover_needs(secs, {"S00", "S01"}, 1650, PlaylistConfig(), [need])
+    assert chosen == {"S00", "S01"} and untaught == [need]
+    # ... or it is pinned.
+    secs[1] = scored(1, 40, dur=900)
+    chosen, untaught = cover_needs(secs, {"S00", "S01"}, 1650, PlaylistConfig(), [need], required={"S01"})
+    assert chosen == {"S00", "S01"} and untaught == [need]
+    # A teacher longer than the need share (10% of the playlist) isn't forced in.
+    secs = [scored(0, 90, dur=900), scored(1, 40, dur=900), scored(3, 60, dur=600)]
+    chosen, untaught = cover_needs(secs, {"S00", "S01"}, 1650, PlaylistConfig(), [need])
+    assert chosen == {"S00", "S01"} and untaught == [need]
+
+
+def test_a_need_already_taught_in_the_playlist_changes_nothing():
+    secs = [scored(0, 90, dur=600), scored(1, 60, dur=120), scored(2, 60, dur=60)]
+    need = OutsideNeed(section_id="S00", prerequisite="LLMs", teachers=["S02", "S01"])
+    chosen, untaught = cover_needs(secs, {"S00", "S01"}, 720, PlaylistConfig(), [need])
+    assert chosen == {"S00", "S01"} and untaught == []

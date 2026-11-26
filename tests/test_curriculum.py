@@ -309,3 +309,13 @@ def test_a_one_word_need_is_taught_only_by_that_concept_but_covered_by_any_at_ho
     alone = src("a", 0, [sec(0, needs=["Python basics"])])
     tool = src("t", 1, [sec(0, teaches=["Python Interpreter"])])
     assert outside_needs([alone, tool])["a"] == []
+
+
+def test_a_teacher_pulled_ahead_brings_its_own_teacher_along():
+    # The course needs what v2 teaches; v2 needs what v1 teaches, and v1 already comes
+    # before v2. Pulling v2 ahead of the course must pull v1 too.
+    c = src("c", 0, [sec(0, needs=["Gradient descent", "Loss landscapes"], start=0)], group="course")
+    v1 = src("v1", 1, [sec(0, teaches=["Neural networks", "Backpropagation"], start=0)])
+    v2 = src("v2", 2, [sec(0, teaches=["Gradient descent", "Loss landscape"], needs=["Neural networks"], start=0)])
+    placed = [Placed("C0", "c", "S00", 0), Placed("V1", "v1", "S00", 0), Placed("V2", "v2", "S00", 0)]
+    assert order_sections(placed, [c, v1, v2], ["c", "v1", "v2"]) == ["V1", "V2", "C0"]

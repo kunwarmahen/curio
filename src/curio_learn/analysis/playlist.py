@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from curio_learn.domain import (
@@ -31,6 +32,9 @@ class PlaylistConfig:
     # fit in `top_share` of the playlist, so shorter sections can't crowd it out.
     top_score: float = 95.0
     top_share: float = 0.5
+    # A curriculum: sections that teach what a chosen section needs from another source
+    # may push out weaker picks, up to this share of the playlist (`cover_needs`).
+    need_share: float = 0.10
 
 
 def compute_budget(
@@ -96,6 +100,102 @@ def select_sections(
                     banned.add(b if a in required else a)
                 else:
                     banned.add(a if _pick_value(by_id[a]) < _pick_value(by_id[b]) else b)
+
+
+@dataclass
+class OutsideNeed:
+    """A section that builds on a concept only other sections teach (a curriculum: a
+    section of another course or video). Any one of `teachers` covers it."""
+
+    section_id: str
+    prerequisite: str
+    teachers: list[str]
+
+
+def cover_needs(
+    scored: list[ScoredSection],
+    chosen: set[str],
+    budget_s: float,
+    config: PlaylistConfig,
+    needs: Sequence[OutsideNeed],
+    *,
+    required: set[str] | None = None,
+    excludes: dict[str, set[str]] | None = None,
+) -> tuple[set[str], list[OutsideNeed]]:
+    """Make sure each chosen section's outside needs are taught in the playlist. For a
+    chosen section whose need no chosen section teaches, the shortest teacher goes in:
+    in the time left when it fits, else in place of the picks worth least per minute, when together
+    they are worth less than the teacher and the section that needs it, and within `need_share` of the
+    playlist in all (so needs can't take it over). Pins, sections already serving a
+    need and the sections that need them are never swapped out. Without this, a teacher
+    went in only as a prerequisite that fit the time left, so a source placed late by
+    hand stayed late. Returns the new set and the needs left untaught."""
+    required, excludes = required or set(), excludes or {}
+    by_id = {s.section.id: s for s in scored}
+    lead = config.lead_in_s + config.tail_s
+    full = budget_s * config.budget_tolerance
+    chosen = set(chosen)
+
+    def cost(x: str) -> float:
+        return by_id[x].section.duration_s + lead
+
+    used = sum(cost(x) for x in chosen if x in by_id)
+    allowance = budget_s * config.need_share
+    protected = set(required)
+    untaught: list[OutsideNeed] = []
+    ordered = sorted(
+        (n for n in needs if n.section_id in by_id),
+        key=lambda n: (-by_id[n.section_id].score.final, n.section_id),
+    )
+    for n in ordered:
+        if n.section_id not in chosen:
+            continue
+        have = [t for t in n.teachers if t in chosen]
+        if have:
+            protected.update([n.section_id, *have])
+            continue
+        options = [
+            t
+            for t in n.teachers
+            if t in by_id
+            and by_id[t].importance != Importance.SKIP
+            and not any(t in excludes.get(x, ()) or x in excludes.get(t, ()) for x in chosen)
+        ]
+        if not options:
+            untaught.append(n)
+            continue
+        t = min(options, key=lambda x: (by_id[x].section.duration_s, -by_id[x].score.final, x))
+        if used + cost(t) <= full:
+            chosen.add(t)
+            used += cost(t)
+            protected.update([n.section_id, t])
+            continue
+        if cost(t) > allowance:
+            untaught.append(n)
+            continue
+        # What the swap may cost: the teacher's own worth plus the section it serves.
+        worth = _pick_value(by_id[t]) + _pick_value(by_id[n.section_id])
+        drop: list[str] = []
+        free, lost = full - used, 0.0
+        # Least value per minute first: the picks worth least overall are short ones that
+        # free little time, and swapping them for a 4.5-minute teacher ran out of worth.
+        for x in sorted(chosen - protected - {n.section_id}, key=lambda x: (_pick_value(by_id[x]) / cost(x), x)):
+            if free >= cost(t):
+                break
+            if lost + _pick_value(by_id[x]) >= worth:
+                break
+            drop.append(x)
+            free += cost(x)
+            lost += _pick_value(by_id[x])
+        if free < cost(t):
+            untaught.append(n)
+            continue
+        chosen.difference_update(drop)
+        chosen.add(t)
+        used = full - free + cost(t)
+        allowance -= cost(t)
+        protected.update([n.section_id, t])
+    return chosen, untaught
 
 
 def _knapsack(

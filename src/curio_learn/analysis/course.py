@@ -28,7 +28,14 @@ from pydantic import BaseModel
 
 from curio_learn.analysis import prompts
 from curio_learn.analysis.curriculum import Placed, Similar, Source, order_sections, outside_needs
-from curio_learn.analysis.playlist import BEYOND_BUDGET, PlaylistConfig, _segment, select_sections
+from curio_learn.analysis.playlist import (
+    BEYOND_BUDGET,
+    OutsideNeed,
+    PlaylistConfig,
+    _segment,
+    cover_needs,
+    select_sections,
+)
 from curio_learn.analysis.profiles import learner_brief
 from curio_learn.analysis.redundancy import similarity_matrix
 from curio_learn.domain import (
@@ -464,6 +471,24 @@ def custom_course_parts(
     return course_parts(lectures, items, chosen, related, config, sequence=sequence)
 
 
+def _untaught_warnings(untaught: Sequence[OutsideNeed], items: Sequence[Item]) -> list[str]:
+    """One line per chosen section whose need from another source didn't fit."""
+    by_key = {it.key: it for it in items}
+    lines: dict[str, str] = {}
+    for n in untaught:
+        it, teacher = by_key.get(n.section_id), by_key.get(n.teachers[0])
+        if it is None or teacher is None or n.section_id in lines:
+            continue
+        lines[n.section_id] = (
+            f"{it.lecture.name}, “{it.section.title}”, builds on “{n.prerequisite}”, which "
+            f"{teacher.lecture.name} teaches (“{teacher.section.title}”); it didn't fit this length."
+        )
+    out = list(lines.values())
+    if len(out) > 3:
+        out = [*out[:3], f"{len(out) - 3} more section(s) build on something taught elsewhere that didn't fit."]
+    return out
+
+
 def build_course_plan(
     provider: LLMProvider,
     *,
@@ -530,6 +555,7 @@ def build_course_plan(
     # section that needs it (added when it fits, played first), as `builds_on` is within
     # a video. A plain course has no such needs: its lectures are one group.
     sources: list[Source] = []
+    outside: list[OutsideNeed] = []
     if groups is not None:
         sources = [
             Source(
@@ -541,13 +567,25 @@ def build_course_plan(
             for lec in lectures
         ]
         key_of = {(it.lecture.analysis.video.video_id, it.section.id): it.key for it in items}
+        rank = {s.key: s.rank for s in sources}
         extra: dict[str, list[str]] = {}
         for src, needs in outside_needs(sources, similar).items():
             for n in needs:
                 mine = key_of.get((src, n.section_id))
-                for other, sid in n.taught_by.items():
-                    teacher = key_of.get((other, sid))
-                    if mine and teacher and teacher not in extra.get(mine, []):
+                teachers = [t for other, sid in n.taught_by.items() if (t := key_of.get((other, sid)))]
+                if not mine or not teachers:
+                    continue
+                # Whole lectures play in source order: only an earlier source can teach it.
+                # Section by section, the teacher moves ahead of the section.
+                early = [
+                    t
+                    for other, sid in n.taught_by.items()
+                    if (t := key_of.get((other, sid))) and (by_section or rank[other] < rank[src])
+                ]
+                if early:
+                    outside.append(OutsideNeed(section_id=mine, prerequisite=n.prerequisite, teachers=early))
+                for teacher in teachers:
+                    if teacher not in extra.get(mine, []):
                         extra.setdefault(mine, []).append(teacher)
         merged = [
             m.model_copy(
@@ -566,6 +604,11 @@ def build_course_plan(
         excludes.setdefault(p.a.key, set()).add(p.b.key)
         excludes.setdefault(p.b.key, set()).add(p.a.key)
     chosen = select_sections(merged, budget_s, config, excludes=excludes, required=required) if merged else set()
+    if outside and chosen:
+        # A section another source's section teaches the basis of: that teacher goes in,
+        # in place of weaker picks if need be, so a source placed late can still move.
+        chosen, untaught = cover_needs(merged, chosen, budget_s, config, outside, required=required, excludes=excludes)
+        warnings.extend(_untaught_warnings(untaught, items))
     pinned_s = sum(it.section.duration_s for it in items if it.key in required)
     if pinned_s > budget_s * config.budget_tolerance:
         warnings.append(

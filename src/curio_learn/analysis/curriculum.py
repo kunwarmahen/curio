@@ -357,7 +357,10 @@ def order_sections(
             if u in last_of:
                 edges.append((last_of[u], mine[0].key))
             last_of[u] = mine[-1].key
-    # Across sources: a chosen teacher before the chosen section that needs it.
+    # Across sources: a chosen teacher before the chosen section that needs it, even when
+    # it already comes first: that section may itself be pulled ahead of a third source
+    # and must bring its teachers along (Karpathy's "What is an LLM", moved up for
+    # CS329Z lecture 2, left 3Blue1Brown's neural networks behind).
     needs = outside_needs(sources, similar)
     for src in sources:
         for n in needs[src.key]:
@@ -366,7 +369,7 @@ def order_sections(
                 continue
             for other, sid in n.taught_by.items():
                 before = by_section.get((other, sid))
-                if before is not None and rank[before] > rank[after]:
+                if before is not None:
                     edges.append((before, after))
     # Drop cross edges that would close a cycle (the order edges come first and stay).
     kept: list[tuple[str, str]] = []
