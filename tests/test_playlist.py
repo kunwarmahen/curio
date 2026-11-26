@@ -307,3 +307,15 @@ def test_a_need_already_taught_in_the_playlist_changes_nothing():
     need = OutsideNeed(section_id="S00", prerequisite="LLMs", teachers=["S02", "S01"])
     chosen, out = cover_needs(secs, {"S00", "S01"}, 720, PlaylistConfig(), [need])
     assert chosen == {"S00", "S01"} and _outcomes(out) == [("in_playlist", "S01", [])]
+
+
+def test_an_untaught_need_says_why():
+    need = OutsideNeed(section_id="S00", prerequisite="LLMs", teachers=["S01"])
+    # The only teacher repeats a section in the playlist.
+    secs = [scored(0, 90, dur=600), scored(1, 60, dur=120), scored(2, 60, dur=120)]
+    _, out = cover_needs(secs, {"S00", "S02"}, 900, PlaylistConfig(), [need], excludes={"S01": {"S02"}, "S02": {"S01"}})
+    assert [(o.status, o.why) for o in out] == [("untaught", "repeat")]
+    # ... or is marked skip.
+    secs[1] = scored(1, 20, dur=120)
+    _, out = cover_needs(secs, {"S00"}, 900, PlaylistConfig(), [need])
+    assert [(o.status, o.why) for o in out] == [("untaught", "skip")]

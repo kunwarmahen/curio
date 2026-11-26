@@ -856,9 +856,29 @@ ReAct left and nothing said why.
   facts on Karpathy's "What is an LLM" and on Lecture 2's "Test-Time Scaling"; no page
   errors, no sideways scroll. The 4 `cover_needs` tests now check outcomes (205 tests).
 
+### The need share and swap rule, swept (2026-11-25)
+- 384 builds with the stub model: the live and test libraries, four source orders
+  (Curio's, Karpathy last, both videos last, the course reversed), 1/2/3/5 hours, both
+  modes, share 0/5/10/15/20% and no cap.
+- Needs of chosen sections taught: 27% with no swaps, 65% at 5%, 68% at 10% and the
+  same at every larger share. The cap never bound above 10%; the most any playlist
+  wanted was 6.6%.
+- All 33 needs left untaught were stopped by the worth rule (none by the share, a
+  repeat or a skip), 26 in 2-hour playlists: nearly all top sections, so a 3.5–4.5
+  minute foundation would cost more than it and the section it serves are worth. At 3
+  and 5 hours they go in. That's the intended trade: a short playlist keeps its best,
+  and **What builds on what** names the gap.
+- Swaps free slightly more than they use (whole sections): playlists end 1.1 minutes
+  shorter on average, at most 3. No refill step.
+- Kept 10% and the rule. An untaught need now says why (`why`), so a teacher left out
+  as a repeat or marked skip no longer reads "didn't fit this length" (none in the
+  sweep). Checked in a browser on a live copy at 2 hours (3 needs not taught, 1280 and
+  390 px, no errors). 1 new test (206 in total).
+
 ### Known gaps / next steps
-- The 10% need share and the swap rule (loss < teacher + the section it serves) were
-  set on one library; a curriculum with many outside needs may want a different share.
+- The share and swap rule are now swept over two libraries, but both are the same
+  sources (CS329Z, Karpathy, 3Blue1Brown) for two goals; a curriculum of unrelated
+  courses with many outside needs is still untried.
 - The Anthropic provider has not been run against the live API (no credentials
   here); `curio check-claude` checks it with one tiny request.
 - Scores are capped at 100, so with the beginner foundation bonus several top sections

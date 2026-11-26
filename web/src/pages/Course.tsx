@@ -191,6 +191,14 @@ function CurriculumPanel({ course, onChange }: { course: Course; onChange: () =>
   )
 }
 
+/** Why a section that teaches a need isn't in the playlist. */
+const UNTAUGHT: Record<'worth' | 'share' | 'repeat' | 'skip', string> = {
+  worth: "it didn't fit this length",
+  share: "it didn't fit this length",
+  repeat: 'it was left out as a repeat of a part in the playlist',
+  skip: 'it was marked as one to skip',
+}
+
 /** "Basic understanding of LLMs" → "basic understanding of LLMs", keeping "LLM inference". */
 function lowerFirst(text: string): string {
   return /^.[a-z]/.test(text) ? text[0].toLowerCase() + text.slice(1) : text
@@ -226,8 +234,8 @@ function NeedsNote({ course }: { course: Course }) {
         ))}
         {untaught.map((n) => (
           <li key={`u:${n.section.video_id}:${n.section.section_id}:${n.prerequisite}`}>
-            {name(n.section)} builds on {lowerFirst(n.prerequisite)}, which {name(n.taught_by)} teaches; it didn't fit
-            this length.
+            {name(n.section)} builds on {lowerFirst(n.prerequisite)}, which {name(n.taught_by)} teaches;{' '}
+            {UNTAUGHT[n.why || 'worth']}.
           </li>
         ))}
       </ul>
@@ -543,7 +551,7 @@ function CoursePlayer(props: { course: Course; plan: CoursePlan; lectures: React
                                 <li key={`${n.section.section_id}:${n.prerequisite}`}>
                                   {n.prerequisite}: <RefButton ref_={n.taught_by} label={label(n.taught_by.lecture)} onPlay={playRef} />{' '}
                                   {n.taught_by.title}
-                                  {n.status === 'untaught' && <span className="muted"> (didn't fit this length)</span>}
+                                  {n.status === 'untaught' && <span className="muted"> ({UNTAUGHT[n.why || 'worth']})</span>}
                                 </li>
                               ))}
                             </ul>

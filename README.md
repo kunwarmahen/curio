@@ -236,8 +236,9 @@ In either order, when a section in your playlist builds on something another sou
 teaches, the section that teaches it goes in too, even if a slightly weaker pick has
 to make room (never one you pinned, and never more than about a tenth of the
 playlist). **What builds on what**, on the curriculum's page, lists what was added
-for which section, what made room for it, and any need that still didn't fit your
-length. While a part plays, **Builds on** links to the section that teaches its basis,
+for which section, what made room for it, and any need that wasn't taught, and why.
+A short playlist (two hours of a long course, say) keeps its strongest parts rather
+than trade them for a foundation; give it more time and the foundations go in. While a part plays, **Builds on** links to the section that teaches its basis,
 and **In the playlist because** (or **Lays the ground for**) names the sections that
 need it.
 

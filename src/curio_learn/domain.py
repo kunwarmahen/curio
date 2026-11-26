@@ -552,6 +552,9 @@ class CourseNeed(BaseModel):
     # in_playlist: picked anyway; added: put in for this need; untaught: didn't fit
     status: Literal["in_playlist", "added", "untaught"]
     made_room: list[CourseRef] = Field(default_factory=list)  # left out so `taught_by` fit
+    # untaught: "worth" (swapping it in cost more than it adds), "share" (past the time
+    # needs may take), "repeat" (it repeats a section in the playlist), "skip"
+    why: str = ""
 
 
 class ChecklistItem(BaseModel):

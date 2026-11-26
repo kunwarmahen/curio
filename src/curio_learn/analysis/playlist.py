@@ -120,6 +120,7 @@ class NeedOutcome:
     status: str  # "in_playlist", "added" or "untaught"
     teacher: str  # the chosen teacher, or the shortest one when untaught
     made_room: list[str]  # picks left out so the teacher fit
+    why: str = ""  # untaught: "skip", "repeat" (repeats a chosen section), "share", "worth"
 
 
 def cover_needs(
@@ -179,7 +180,8 @@ def cover_needs(
         ]
         if not options:
             if known:
-                outcomes.append(NeedOutcome(n, "untaught", shortest(known), []))
+                skip = all(by_id[t].importance == Importance.SKIP for t in known)
+                outcomes.append(NeedOutcome(n, "untaught", shortest(known), [], "skip" if skip else "repeat"))
             continue
         t = shortest(options)
         if used + cost(t) <= full:
@@ -189,7 +191,7 @@ def cover_needs(
             outcomes.append(NeedOutcome(n, "added", t, []))
             continue
         if cost(t) > allowance:
-            outcomes.append(NeedOutcome(n, "untaught", t, []))
+            outcomes.append(NeedOutcome(n, "untaught", t, [], "share"))
             continue
         # What the swap may cost: the teacher's own worth plus the section it serves.
         worth = _pick_value(by_id[t]) + _pick_value(by_id[n.section_id])
@@ -206,7 +208,7 @@ def cover_needs(
             free += cost(x)
             lost += _pick_value(by_id[x])
         if free < cost(t):
-            outcomes.append(NeedOutcome(n, "untaught", t, []))
+            outcomes.append(NeedOutcome(n, "untaught", t, [], "worth"))
             continue
         chosen.difference_update(drop)
         chosen.add(t)

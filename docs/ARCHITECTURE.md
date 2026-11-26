@@ -162,7 +162,8 @@ CoursePlan      id, course_id, status, budget_s, total_s, original_s, analysis_i
                 checklist[ChecklistItem], needs[CourseNeed], order (lectures|sections),
                 warnings[]
 CourseNeed      section (CourseRef, in the playlist), prerequisite, taught_by
-                (CourseRef), status (in_playlist|added|untaught), made_room[CourseRef]
+                (CourseRef), status (in_playlist|added|untaught), made_room[CourseRef],
+                why (untaught: worth|share|repeat|skip)
 CoursePart      key "<video_id>@<start>", lecture, video_id, analysis_id,
                 section_ids[], title, start_s, end_s, what_you_learn, importance,
                 score, also_in[CourseRef]
@@ -725,7 +726,22 @@ so one analyzed for another goal isn't queued again).
   what was added, what made room and what wasn't taught; a playing part shows **Builds
   on** (its needs and their teachers) and **In the playlist because** / **Lays the
   ground for** (the sections that need it). These replace the plan warnings an untaught
-  need first got. Before this, a teacher went in
+  need first got. An untaught need says why (`why`): the swap would cost more than it
+  adds (`worth`), past the share (`share`), the teacher repeats a part in the playlist
+  (`repeat`) or is marked skip (`skip`); the page words the first two as "didn't fit
+  this length".
+- **The share and the swap rule, swept** (2 libraries: live and test; 4 source orders:
+  Curio's, Karpathy last, both videos last, the course reversed; 1, 2, 3 and 5 hours;
+  both modes; share 0, 5, 10, 15, 20% and no cap; 384 builds, stub model). Needs of
+  chosen sections taught: 27% without swaps, 65% at 5%, 68% at 10% and the same at
+  every larger share: the cap never bound above 10%, and the most any playlist wanted
+  was 6.6% (test library, 3 hours, section by section). All 33 needs left untaught
+  (of 104) were stopped by the worth rule, 26 of them in 2-hour playlists, where the
+  picks are nearly all top sections and swapping in a 3.5–4.5 minute foundation would
+  cost more than it and the section it serves are worth; at 3 and 5 hours they go in.
+  Swaps push out a little more time than they add (sections are whole), leaving the
+  playlist 1.1 minutes shorter on average (at most 3), not worth a refill step. Kept:
+  10% and the rule as they are. Before this, a teacher went in
   only as a `builds_on` prerequisite that fit the time left, and a source placed late
   by hand stayed late. First tries, on the curriculum test library with Karpathy put
   last by hand (3 hours, section by section): dropping the picks worth least overall

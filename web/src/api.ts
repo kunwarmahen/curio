@@ -375,6 +375,7 @@ export interface CourseNeed {
   taught_by: CourseRef
   status: 'in_playlist' | 'added' | 'untaught'
   made_room: CourseRef[] // left out so `taught_by` fit
+  why?: '' | 'worth' | 'share' | 'repeat' | 'skip' // why an untaught need wasn't taught
 }
 
 export interface ChecklistItem {

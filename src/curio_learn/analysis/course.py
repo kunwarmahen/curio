@@ -491,6 +491,7 @@ def _course_needs(outcomes: Sequence[NeedOutcome], items: Sequence[Item]) -> lis
                 taught_by=teacher.ref(),
                 status=o.status,
                 made_room=[by_key[x].ref() for x in o.made_room if x in by_key],
+                why=o.why,
             )
         )
     out.sort(key=lambda n: (n.section.lecture, n.section.start_s))
