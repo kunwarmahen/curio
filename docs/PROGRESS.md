@@ -841,9 +841,22 @@ hand in a 3-hour playlist, nothing moved.
   parts, the rest unchanged. Karpathy's own need for neural networks doesn't pull in
   3Blue1Brown, which plays after it: whole lectures don't move by section.
 
+### What builds on what, shown (2026-11-25)
+The new step changed the playlist without a word: on the live rebuild Lecture 6's
+ReAct left and nothing said why.
+- `cover_needs` returns an outcome per need (taught by a section already in the
+  playlist, added and what made room, or not taught), saved on the plan as `needs`
+  (`CourseNeed`); it replaces the warning lines.
+- Curriculum page: **What builds on what** ("3 parts added") lists each added part, the
+  section that needs it, and what was left out for it, plus needs that didn't fit. While
+  a part plays: **Builds on** (the need and a link to its teacher) and **In the playlist
+  because** / **Lays the ground for** (the sections that need it, linked).
+- Checked in a browser on a copy of the test library (Karpathy last, section by
+  section, stub model; 1280 and 390 px): 3 parts added with what made room, both
+  facts on Karpathy's "What is an LLM" and on Lecture 2's "Test-Time Scaling"; no page
+  errors, no sideways scroll. The 4 `cover_needs` tests now check outcomes (205 tests).
+
 ### Known gaps / next steps
-- Untaught needs are listed as warnings but not on the curriculum's "Why this order"
-  panel; a section-level "why it's here" for added teachers would explain the swaps.
 - The 10% need share and the swap rule (loss < teacher + the section it serves) were
   set on one library; a curriculum with many outside needs may want a different share.
 - The Anthropic provider has not been run against the live API (no credentials

@@ -162,6 +162,7 @@ function CurriculumPanel({ course, onChange }: { course: Course; onChange: () =>
           <strong>Build again with this length</strong> to apply the new order.
         </p>
       )}
+      <NeedsNote course={course} />
       {cur.auto_order ? (
         cur.notes.length > 0 && (
           <details className="curriculum__why">
@@ -187,6 +188,50 @@ function CurriculumPanel({ course, onChange }: { course: Course; onChange: () =>
         </p>
       )}
     </section>
+  )
+}
+
+/** "Basic understanding of LLMs" → "basic understanding of LLMs", keeping "LLM inference". */
+function lowerFirst(text: string): string {
+  return /^.[a-z]/.test(text) ? text[0].toLowerCase() + text.slice(1) : text
+}
+
+/** What the built playlist added because a section builds on another source, what made
+ *  room for it, and what didn't fit. */
+function NeedsNote({ course }: { course: Course }) {
+  const plan = course.plan
+  const needs = plan?.status === 'done' ? (plan.needs ?? []) : []
+  const added = needs.filter((n) => n.status === 'added')
+  const untaught = needs.filter((n) => n.status === 'untaught')
+  if (!added.length && !untaught.length) return null
+  const labels = new Map(course.lectures.map((l) => [l.position, l.label]))
+  const name = (r: CourseRef) => `${shortTitle(labels.get(r.lecture) ?? `#${r.lecture}`)}, “${r.title}”`
+  return (
+    <details className="curriculum__why">
+      <summary>
+        What builds on what:{' '}
+        {[
+          added.length && `${added.length} part${added.length === 1 ? '' : 's'} added`,
+          untaught.length && `${untaught.length} need${untaught.length === 1 ? '' : 's'} not taught`,
+        ]
+          .filter(Boolean)
+          .join(', ')}
+      </summary>
+      <ul>
+        {added.map((n) => (
+          <li key={`a:${n.section.video_id}:${n.section.section_id}:${n.prerequisite}`}>
+            Added {name(n.taught_by)}: {name(n.section)} builds on {lowerFirst(n.prerequisite)}.
+            {n.made_room.length > 0 && <> To make room, left out {n.made_room.map(name).join('; ')}.</>}
+          </li>
+        ))}
+        {untaught.map((n) => (
+          <li key={`u:${n.section.video_id}:${n.section.section_id}:${n.prerequisite}`}>
+            {name(n.section)} builds on {lowerFirst(n.prerequisite)}, which {name(n.taught_by)} teaches; it didn't fit
+            this length.
+          </li>
+        ))}
+      </ul>
+    </details>
   )
 }
 
@@ -481,6 +526,48 @@ function CoursePlayer(props: { course: Course; plan: CoursePlan; lectures: React
                     <dd>{now.part.why_valuable}</dd>
                   </>
                 )}
+                {(() => {
+                  const part = now.part
+                  const inPart = (r: CourseRef) => r.video_id === part.video_id && part.section_ids.includes(r.section_id)
+                  const needs = plan.needs ?? []
+                  const basis = needs.filter((n) => inPart(n.section))
+                  const base = needs.filter((n) => n.status !== 'untaught' && inPart(n.taught_by))
+                  return (
+                    <>
+                      {basis.length > 0 && (
+                        <>
+                          <dt>Builds on</dt>
+                          <dd>
+                            <ul className="course__refs">
+                              {basis.map((n) => (
+                                <li key={`${n.section.section_id}:${n.prerequisite}`}>
+                                  {n.prerequisite}: <RefButton ref_={n.taught_by} label={label(n.taught_by.lecture)} onPlay={playRef} />{' '}
+                                  {n.taught_by.title}
+                                  {n.status === 'untaught' && <span className="muted"> (didn't fit this length)</span>}
+                                </li>
+                              ))}
+                            </ul>
+                          </dd>
+                        </>
+                      )}
+                      {base.length > 0 && (
+                        <>
+                          <dt>{base.some((n) => n.status === 'added') ? 'In the playlist because' : 'Lays the ground for'}</dt>
+                          <dd>
+                            <ul className="course__refs">
+                              {base.map((n) => (
+                                <li key={`${n.section.video_id}:${n.section.section_id}:${n.prerequisite}`}>
+                                  <RefButton ref_={n.section} label={label(n.section.lecture)} onPlay={playRef} />{' '}
+                                  {n.section.title} builds on {lowerFirst(n.prerequisite)}
+                                </li>
+                              ))}
+                            </ul>
+                          </dd>
+                        </>
+                      )}
+                    </>
+                  )
+                })()}
                 {now.part.also_in.length > 0 && (
                   <>
                     <dt>Also taught in</dt>

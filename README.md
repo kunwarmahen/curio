@@ -235,8 +235,11 @@ curriculum**.
 In either order, when a section in your playlist builds on something another source
 teaches, the section that teaches it goes in too, even if a slightly weaker pick has
 to make room (never one you pinned, and never more than about a tenth of the
-playlist). If it still doesn't fit your length, the playlist's **things to know**
-list says which section builds on what, and where that's taught.
+playlist). **What builds on what**, on the curriculum's page, lists what was added
+for which section, what made room for it, and any need that still didn't fit your
+length. While a part plays, **Builds on** links to the section that teaches its basis,
+and **In the playlist because** (or **Lays the ground for**) names the sections that
+need it.
 
 A new curriculum has no playlist yet: press **Build the course playlist** on its page.
 Every build first puts the lectures in order. You can switch the order on the

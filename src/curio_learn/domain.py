@@ -542,6 +542,18 @@ class CoursePair(BaseModel):
     b_in_playlist: bool = False
 
 
+class CourseNeed(BaseModel):
+    """A section in the playlist that builds on something another source teaches (a
+    curriculum), and what the playlist does about it."""
+
+    section: CourseRef  # the section that needs it
+    prerequisite: str  # in the analysis's words: "Basic understanding of LLM inference"
+    taught_by: CourseRef  # the section that teaches it (the shortest one, when untaught)
+    # in_playlist: picked anyway; added: put in for this need; untaught: didn't fit
+    status: Literal["in_playlist", "added", "untaught"]
+    made_room: list[CourseRef] = Field(default_factory=list)  # left out so `taught_by` fit
+
+
 class ChecklistItem(BaseModel):
     text: str
     why: str = ""
@@ -563,6 +575,7 @@ class CoursePlan(BaseModel):
     repeats: list[CourseRepeat] = Field(default_factory=list)
     pairs: list[CoursePair] = Field(default_factory=list)  # every pair judged, closest first
     checklist: list[ChecklistItem] = Field(default_factory=list)
+    needs: list[CourseNeed] = Field(default_factory=list)  # a curriculum's needs across sources
     # How the parts are ordered: by lecture, or section by section (a curriculum).
     order: Literal["lectures", "sections"] = "lectures"
     warnings: list[str] = Field(default_factory=list)

@@ -159,7 +159,10 @@ Course          id, title, channel, playlist_id, preferences, lectures[CourseLec
                 custom_parts[] (the learner's own playlist), curriculum?
 CoursePlan      id, course_id, status, budget_s, total_s, original_s, analysis_ids[],
                 parts[CoursePart], repeats[CourseRepeat], pairs[CoursePair],
-                checklist[ChecklistItem], order (lectures|sections), warnings[]
+                checklist[ChecklistItem], needs[CourseNeed], order (lectures|sections),
+                warnings[]
+CourseNeed      section (CourseRef, in the playlist), prerequisite, taught_by
+                (CourseRef), status (in_playlist|added|untaught), made_room[CourseRef]
 CoursePart      key "<video_id>@<start>", lecture, video_id, analysis_id,
                 section_ids[], title, start_s, end_s, what_you_learn, importance,
                 score, also_in[CourseRef]
@@ -715,8 +718,14 @@ so one analyzed for another goal isn't queued again).
   teachers already serving a need and the sections they serve are never swapped out;
   needs go best section first. Whole lectures play in source order, so there only a
   teacher from an *earlier* source counts; section by section, any teacher does (it
-  moves ahead). A need still untaught becomes a plan warning naming the section, the
-  need and where it's taught (at most three lines). Before this, a teacher went in
+  moves ahead). `cover_needs` returns an outcome per need of a section still in the
+  playlist (`in_playlist`, `added` with what it `made_room` for, or `untaught` with the
+  shortest teacher), saved as `plan.needs` (one per section and prerequisite, in course
+  order; older plans have none). The curriculum panel's **What builds on what** lists
+  what was added, what made room and what wasn't taught; a playing part shows **Builds
+  on** (its needs and their teachers) and **In the playlist because** / **Lays the
+  ground for** (the sections that need it). These replace the plan warnings an untaught
+  need first got. Before this, a teacher went in
   only as a `builds_on` prerequisite that fit the time left, and a source placed late
   by hand stayed late. First tries, on the curriculum test library with Karpathy put
   last by hand (3 hours, section by section): dropping the picks worth least overall

@@ -369,6 +369,14 @@ export interface CoursePair {
   b_in_playlist: boolean
 }
 
+export interface CourseNeed {
+  section: CourseRef // in the playlist; builds on something another source teaches
+  prerequisite: string
+  taught_by: CourseRef
+  status: 'in_playlist' | 'added' | 'untaught'
+  made_room: CourseRef[] // left out so `taught_by` fit
+}
+
 export interface ChecklistItem {
   text: string
   why: string
@@ -390,6 +398,7 @@ export interface CoursePlan {
   repeats: CourseRepeat[]
   pairs?: CoursePair[] // missing on plans built before the comparisons were kept
   checklist: ChecklistItem[]
+  needs?: CourseNeed[] // a curriculum's needs across sources; missing on older plans
   order?: CurriculumOrder // a curriculum section by section plays its parts in that order
   warnings: string[]
   elapsed_s: number

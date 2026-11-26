@@ -30,6 +30,7 @@ from curio_learn.analysis import prompts
 from curio_learn.analysis.curriculum import Placed, Similar, Source, order_sections, outside_needs
 from curio_learn.analysis.playlist import (
     BEYOND_BUDGET,
+    NeedOutcome,
     OutsideNeed,
     PlaylistConfig,
     _segment,
@@ -41,6 +42,7 @@ from curio_learn.analysis.redundancy import similarity_matrix
 from curio_learn.domain import (
     AnalysisStatus,
     ChecklistItem,
+    CourseNeed,
     CoursePair,
     CoursePart,
     CoursePlan,
@@ -471,21 +473,27 @@ def custom_course_parts(
     return course_parts(lectures, items, chosen, related, config, sequence=sequence)
 
 
-def _untaught_warnings(untaught: Sequence[OutsideNeed], items: Sequence[Item]) -> list[str]:
-    """One line per chosen section whose need from another source didn't fit."""
+def _course_needs(outcomes: Sequence[NeedOutcome], items: Sequence[Item]) -> list[CourseNeed]:
+    """The plan's record of each chosen section's need from another source: one per
+    section and prerequisite, in course order."""
     by_key = {it.key: it for it in items}
-    lines: dict[str, str] = {}
-    for n in untaught:
-        it, teacher = by_key.get(n.section_id), by_key.get(n.teachers[0])
-        if it is None or teacher is None or n.section_id in lines:
+    out: list[CourseNeed] = []
+    seen: set[tuple[str, str]] = set()
+    for o in outcomes:
+        it, teacher = by_key.get(o.need.section_id), by_key.get(o.teacher)
+        if it is None or teacher is None or (it.key, o.need.prerequisite) in seen:
             continue
-        lines[n.section_id] = (
-            f"{it.lecture.name}, “{it.section.title}”, builds on “{n.prerequisite}”, which "
-            f"{teacher.lecture.name} teaches (“{teacher.section.title}”); it didn't fit this length."
+        seen.add((it.key, o.need.prerequisite))
+        out.append(
+            CourseNeed(
+                section=it.ref(),
+                prerequisite=o.need.prerequisite,
+                taught_by=teacher.ref(),
+                status=o.status,
+                made_room=[by_key[x].ref() for x in o.made_room if x in by_key],
+            )
         )
-    out = list(lines.values())
-    if len(out) > 3:
-        out = [*out[:3], f"{len(out) - 3} more section(s) build on something taught elsewhere that didn't fit."]
+    out.sort(key=lambda n: (n.section.lecture, n.section.start_s))
     return out
 
 
@@ -604,11 +612,12 @@ def build_course_plan(
         excludes.setdefault(p.a.key, set()).add(p.b.key)
         excludes.setdefault(p.b.key, set()).add(p.a.key)
     chosen = select_sections(merged, budget_s, config, excludes=excludes, required=required) if merged else set()
+    needs: list[CourseNeed] = []
     if outside and chosen:
         # A section another source's section teaches the basis of: that teacher goes in,
         # in place of weaker picks if need be, so a source placed late can still move.
-        chosen, untaught = cover_needs(merged, chosen, budget_s, config, outside, required=required, excludes=excludes)
-        warnings.extend(_untaught_warnings(untaught, items))
+        chosen, outcomes = cover_needs(merged, chosen, budget_s, config, outside, required=required, excludes=excludes)
+        needs = _course_needs(outcomes, items)
     pinned_s = sum(it.section.duration_s for it in items if it.key in required)
     if pinned_s > budget_s * config.budget_tolerance:
         warnings.append(
@@ -696,6 +705,7 @@ def build_course_plan(
             for p in pairs
         ],
         checklist=checklist,
+        needs=needs,
         order="sections" if by_section else "lectures",
         warnings=warnings,
         llm=LLMInfo(provider=provider.name, models={"course": model}),
