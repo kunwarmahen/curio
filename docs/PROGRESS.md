@@ -1016,6 +1016,10 @@ ReAct left and nothing said why.
   gradient descent and no backpropagation lecture, but has Cramer's rule, "Registering
   custom functions in PyTorch" and "Fixing the zero_grad bug". 11 of 12 checklist
   points cite sections the playlist left out.
+- Live after the restart (5:13 PM): the 1-hour playlist built in 3.6 min with the GPU
+  free, 65.1 min, 12 checklist points and no warnings. The page shows "Easy to miss
+  (12)" as its first tab; no errors and no sideways scroll at 1280 and 390 px. All 12
+  points still come from Karpathy's lectures 31–36 (see Known gaps).
 
 ### Known gaps / next steps
 - A curriculum picks by each video's own scores, and its goal isn't used. Scores rank
