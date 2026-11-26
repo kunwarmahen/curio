@@ -237,6 +237,7 @@ def _knapsack(
     ]
     if not items:
         return set()
+    eligible = list(items)  # before pins and top sections are taken out
     full = limit = budget_s * config.budget_tolerance
     lead = config.lead_in_s + config.tail_s
     # The learner's pins first, whatever they cost; they come out of the time left.
@@ -277,9 +278,13 @@ def _knapsack(
     cost = [math.ceil((s.section.duration_s + lead) / unit) for s in items]
     # A section that better sections build on is worth a little more (10% per such
     # section, up to two), so a prerequisite wins a near tie with an unrelated section.
+    # Pinned and top sections count too: they are surely in, and their foundations
+    # matter most (counting only the sections left here, Kubernetes for beginners
+    # dropped "What is Kubernetes" and its architecture, both built on by the two
+    # 100-scored sections, for Volumes and Deployments).
     score_of = {s.section.id: s.score.final for s in items}
     dependants: dict[str, int] = {}
-    for s in items:
+    for s in eligible:
         for p in set(s.evaluation.builds_on):
             if p in score_of and s.score.final > score_of[p]:
                 dependants[p] = dependants.get(p, 0) + 1

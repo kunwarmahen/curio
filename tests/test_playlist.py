@@ -319,3 +319,10 @@ def test_an_untaught_need_says_why():
     secs[1] = scored(1, 20, dur=120)
     _, out = cover_needs(secs, {"S00"}, 900, PlaylistConfig(), [need])
     assert [(o.status, o.why) for o in out] == [("untaught", "skip")]
+
+
+def test_a_foundation_of_a_top_section_wins_a_near_tie():
+    # S01 (100) is reserved as a top section and builds on S00; one of S00 and S02 fits
+    # next to it. S02 is worth a little more on its own; S00 is what S01 builds on.
+    secs = [scored(0, 90, dur=180), scored(1, 100, dur=300, builds_on=["S00"]), scored(2, 91, dur=180)]
+    assert select_sections(secs, 573, PlaylistConfig()) == {"S00", "S01"}

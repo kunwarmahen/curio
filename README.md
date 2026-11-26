@@ -110,7 +110,8 @@ fainter is recommended or optional, hatched is safe to skip. Essential parts are
 always in your playlist; a part that scored as essential but didn't fit your watch
 time is shown as recommended, and "How it was scored" says so. The very best parts
 (scored 95 or more) go in first, as long as together they take at most half your watch
-time. Your playlist is
+time. Among the rest, a part that the best parts build on wins a close call, so the
+basics they assume come along. Your playlist is
 underlined and a red line shows where playback is. Click any stretch to play it.
 
 **Your playlist** sits beside the player. Each part says what you'll learn and why

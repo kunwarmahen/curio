@@ -875,17 +875,36 @@ ReAct left and nothing said why.
   sweep). Checked in a browser on a live copy at 2 hours (3 needs not taught, 1280 and
   390 px, no errors). 1 new test (206 in total).
 
+### Foundations of the top sections, and ties at 100 (2026-11-25)
+- **The real loss wasn't the tie.** Rescored with the current code (36 saved analyses in
+  the dev, live and test databases, no model), Kubernetes for beginners left out "What
+  is Kubernetes" (95.7) and Architecture (93.0), the two sections the rest builds on,
+  for Volumes (83.6) and Deployments (94.6). The knapsack's 10% bonus for "a better
+  section builds on this" counted only sections still in the knapsack, and the two
+  sections built on them (Core Components and Configuration Files, both 100) had
+  already gone in as top sections. Pinned and top sections count now: both foundations
+  are in (5.25 against 4.93). The other 35 analyses pick the same sections.
+- **Ties at 100 broken by the foundation bonus:** no playlist changed in the 36, so not
+  added. The other Kubernetes analysis already has "What is Kubernetes"; Architecture
+  (94.6) gets the bonus now but still loses to ConfigMaps, Volumes and the ConfigMap
+  demo at 4.5 minutes, a fair call.
+- **Courses** (live copy, stub model): CS329Z at 90 minutes gains CodeAct (built on by
+  the Pi harness case study, 97) and multi-agent failure modes for sleep-time memory
+  maintenance and an eval Q&A; at 180 minutes "Anatomy of an LLM Agent" (built on by
+  compound AI systems, 98, and agent memory, 91) for a REST comparison and a
+  distillation example. Same lengths. Saved playlists change when re-analyzed or
+  rebuilt.
+- 1 new test (207 in total).
+
 ### Known gaps / next steps
 - The share and swap rule are now swept over two libraries, but both are the same
   sources (CS329Z, Karpathy, 3Blue1Brown) for two goals; a curriculum of unrelated
   courses with many outside needs is still untried.
-- The Anthropic provider has not been run against the live API (no credentials
+- On hold: the Anthropic provider has not been run against the live API (no credentials
   here); `curio check-claude` checks it with one tiny request.
-- Scores are capped at 100, so with the beginner foundation bonus several top sections
-  tie at 100 and the bonus can't separate them (Kubernetes).
-- Sections tied at 100 fill the half reserved for top sections shortest first; a
-  foundation just under 95 can lose its place to them (Kubernetes Architecture, 94.6).
-  Sorting by the uncapped score made that playlist worse, so it was dropped.
+- Scores are capped at 100 and ties there fill the top half shortest first. Breaking
+  them by the foundation bonus changed no saved playlist (2026-11-25), so it stays; a
+  library where it matters would reopen it.
 - The knapsack values a section by √minutes below the top sections; whether √ is the
   right curve hasn't been tested with a learner.
 - Repeat verdicts were checked by hand on CS329Z (temperature 0, no repeats): 6 of 7
