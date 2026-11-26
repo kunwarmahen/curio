@@ -832,6 +832,14 @@ hand in a 3-hour playlist, nothing moved.
   minutes of Karpathy's security part. In Curio's own order with whole lectures, it adds
   Karpathy's "What is an LLM" and LLM OS sections, which Lecture 2 needs.
 - 5 new tests (205 in total).
+- **Live check** (after the restart): "Build AI agents" rebuilt at 3 hours, whole lectures
+  in Curio's order (194 s; 72 pairs, 3 repeats left out, 12 checklist points). It adds
+  Karpathy's "What is an LLM? Inference and the Two-File Model" at the start, which
+  Lecture 2's "Test-Time Scaling" needs; to make room, Lecture 3's vector search part is
+  2.6 minutes shorter and Lecture 6's "ReAct: Reasoning and Acting" (judged an overlap
+  with Lecture 1's ReAct example, not a repeat) is out. No untaught needs, 196 min, 47
+  parts, the rest unchanged. Karpathy's own need for neural networks doesn't pull in
+  3Blue1Brown, which plays after it: whole lectures don't move by section.
 
 ### Known gaps / next steps
 - Untaught needs are listed as warnings but not on the curriculum's "Why this order"
