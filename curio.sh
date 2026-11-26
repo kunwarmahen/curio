@@ -27,7 +27,8 @@
 #                       an NVIDIA CDI spec exists (nvidia-ctk cdi generate).
 #   CURIO_GPU_PROCESSES 1 = with the GPU check, also share the host's process list
 #                       (--pid=host) so the GPU page can name the programs using the
-#                       GPU; 0 = don't (the page then shows only the card and Ollama).
+#                       GPU and Ollama's clients; 0 = don't (the page then shows only
+#                       the card and Ollama's models).
 #                       Default: 1.
 # Values in ./.env (API keys, models, weights) are passed to the container.
 set -euo pipefail

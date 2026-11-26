@@ -8,7 +8,9 @@ import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
+from pathlib import Path
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -38,7 +40,7 @@ from curio_learn.domain import (
     VideoAnalysis,
 )
 from curio_learn.errors import CurioError, InvalidURL, Paused
-from curio_learn.gpu import GpuReport, gpu_report
+from curio_learn.gpu import GpuReport, OllamaClient, gpu_report
 from curio_learn.logging_setup import configure_logging
 from curio_learn.overnight import LocalGpuProbe, QueueStatus, QueueWorker, Window
 from curio_learn.service import CurioService
@@ -232,6 +234,14 @@ def own_models(service: CurioService) -> set[str]:
     return {s.model_for(t) for t in ("outline", "evaluate", "notes", "study", "course", "ask")} | {s.embed_model} - {""}
 
 
+# Podman's container store, to name containers: readable when Curio runs on the host
+# as the user who runs them (in its container, quadlet units still name theirs).
+CONTAINER_STORES = (str(Path.home() / ".local/share/containers/storage/overlay-containers"),)
+
+
+CLIENT_MEMORY = timedelta(minutes=15)
+
+
 class GpuWatch:
     """The GPU page's report, read at most every 2 s however many pages poll it."""
 
@@ -239,19 +249,48 @@ class GpuWatch:
         self.service = service
         self._lock = threading.Lock()
         self._last: tuple[float, GpuReport] | None = None
+        self._seen: dict[tuple[str, str, str], OllamaClient] = {}
         self._ollama = None
         if service.settings.resolved_provider == "ollama" and service.settings.ollama_host:
             import ollama
 
             self._ollama = ollama.Client(host=service.settings.ollama_host, timeout=5)
+        port = urlparse(
+            service.settings.ollama_host
+            if "//" in service.settings.ollama_host
+            else "//" + service.settings.ollama_host
+        ).port
+        self._port = port or 11434
+        self._names = next((d for d in CONTAINER_STORES if (Path(d) / "volatile-containers.json").exists()), None)
 
     def report(self) -> GpuReport:
         with self._lock:
             if self._last and time.monotonic() - self._last[0] < 2.0:
                 return self._last[1]
-            report = gpu_report(own_models=own_models(self.service), ollama_client=self._ollama)
+            report = self._read()
+            report.ollama_clients = self._remember(report)
             self._last = (time.monotonic(), report)
             return report
+
+    def _remember(self, report: GpuReport) -> list[OllamaClient] | None:
+        """Ollama's clients connect only while they send a request: keep each one seen in
+        the last 15 minutes (while this page was being read), with when."""
+        if report.ollama_clients is None:
+            return None
+        now = report.checked_at
+        for c in report.ollama_clients:
+            self._seen[(c.app, c.program, c.command)] = c.model_copy(update={"last_seen": now})
+        self._seen = {k: c for k, c in self._seen.items() if now - c.last_seen < CLIENT_MEMORY}
+        now_keys = {(c.app, c.program, c.command) for c in report.ollama_clients}
+        return [c.model_copy(update={"connected": k in now_keys}) for k, c in self._seen.items()]
+
+    def _read(self) -> GpuReport:
+        return gpu_report(
+            own_models=own_models(self.service),
+            ollama_client=self._ollama,
+            ollama_port=self._port,
+            names_dir=self._names,
+        )
 
 
 def build_queue(service: CurioService, jobs: Jobs) -> QueueWorker:

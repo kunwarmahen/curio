@@ -965,6 +965,24 @@ ReAct left and nothing said why.
   point at `sarathi-dvara` (open connection); `twitter-summary-agent` and
   `blockoku-tunnel` also show connections, but those may be the host's own. The
   page can't show this yet.
+- **Programs using Ollama**, added to the GPU page. Curio's container can't read the
+  socket list (`/proc/<pid>/fd`) of another container, even one running as the same
+  host uid. Its own user namespace hides it, as on sarathi-dvara (fd and ns denied;
+  cgroup, cmdline and net/tcp readable). Such a container is credited as a whole when
+  its connection table is its own. The host network's shared table is skipped, which
+  removed the false twitter-summary-agent, blockoku and conmon entries seen in the
+  first try.
+  - **Names:** quadlet containers are named after their systemd unit. Mounting
+    Podman's store didn't work: the image runs as `curio`, which can't read
+    `~/.local/share/containers`.
+  - **Results:** in a container of the Curio image the scan found exactly sarathi-dvara
+    (`dvara … --provider ollama --model qwen3.8-64k:latest`) and Curio, in 0.2 s. On
+    the host it found dvara's own pid.
+  - **Memory:** a client connects only while it sends a request, so the page keeps
+    each one seen in the last 15 minutes. A held test connection showed as "connected
+    now", then as "last seen" with its time.
+  - Checked in a browser at 1280 and 390 px: no page errors and no sideways scroll.
+    4 new tests (218 in total).
 
 ### Known gaps / next steps
 - The share and swap rule are now swept over two libraries, but both are the same

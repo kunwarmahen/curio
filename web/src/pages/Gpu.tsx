@@ -19,7 +19,11 @@ function verdict(g: GpuStatus): string {
   if (!card) return g.nvidia_smi ? 'nvidia-smi found no GPU.' : 'Curio can’t read the GPU here (no nvidia-smi).'
   const util = card.utilization ?? 0
   const top = g.processes.find((p) => p.kind !== 'graphics') ?? g.processes[0]
-  const ollama = top?.app.startsWith('ollama') && g.ollama.length ? `Ollama (${g.ollama.map((m) => m.name).join(', ')})` : ''
+  const users = (g.ollama_clients ?? []).filter((c) => !c.curio && c.connected).map((c) => c.app || c.program)
+  const ollama =
+    top?.app.startsWith('ollama') && g.ollama.length
+      ? `Ollama (${g.ollama.map((m) => m.name).join(', ')}${users.length ? `, used by ${users.join(', ')}` : ''})`
+      : ''
   const who = ollama || (top ? `${top.program}${top.app ? ` (${top.app})` : ''}` : '')
   if (util < 20) return who && (top?.memory_mb ?? 0) > 1024 ? `Mostly idle. ${who} holds ${size(top!.memory_mb)} of memory.` : 'Idle.'
   return who ? `In use, ${util}% busy. The biggest user is ${who}, with ${size(top!.memory_mb)}.` : `In use, ${util}% busy.`
@@ -122,6 +126,49 @@ function Ollama({ g }: { g: GpuStatus }) {
   )
 }
 
+function Clients({ g }: { g: GpuStatus }) {
+  const clients = g.ollama_clients
+  if (clients === null) return <p className="hint">Curio can’t see the host’s connections from here.</p>
+  const others = clients.filter((c) => !c.curio)
+  const own = clients.length - others.length
+  return (
+    <>
+      <h3 className="gpu__sub">Programs using Ollama</h3>
+      <p className="hint">
+        A program connects only while it sends a request, so this lists the ones seen connected in the last 15
+        minutes while this page was open.
+      </p>
+      {others.length === 0 ? (
+        <p className="muted">None but Curio so far.</p>
+      ) : (
+        <ul className="gpu__procs">
+          {others.map((c) => (
+            <li key={c.pid} className="gpu__proc">
+              <div className="gpu__proc-head">
+                <strong className="gpu__program">{c.app || c.program}</strong>
+                {c.app && <span className="queue__badge">{c.program}</span>}
+              </div>
+              <p className="gpu__proc-facts">
+                <span>
+                  {c.connections} connection{c.connections === 1 ? '' : 's'}
+                </span>
+                <span className={c.connected ? 'queue__badge queue__badge--live' : 'queue__badge'}>
+                  {c.connected ? 'connected now' : `last seen ${c.last_seen ? clockTime(c.last_seen) : 'recently'}`}
+                </span>
+                <span className="muted">
+                  {c.exact ? `pid ${c.pid}` : `pid ${c.pid}, the container’s main program`}
+                </span>
+              </p>
+              {c.command && <code className="gpu__cmd">{c.command}</code>}
+            </li>
+          ))}
+        </ul>
+      )}
+      {own > 0 && <p className="hint">Curio itself also connects: it checks which models are loaded.</p>}
+    </>
+  )
+}
+
 function Curio({ g }: { g: GpuStatus }) {
   if (g.curio_doing.length > 0) return <p>Analyzing {g.curio_doing.join('; ')}.</p>
   return (
@@ -188,8 +235,12 @@ export function GpuPage() {
           </section>
           <section className="course__section" aria-labelledby="gpu-ollama">
             <h2 id="gpu-ollama">Ollama models</h2>
-            <p className="hint">Ollama runs every model in its own process, so it can’t say which program asked for one.</p>
+            <p className="hint">
+              Ollama runs every model in its own process and can’t say which program asked for one. The programs
+              connected to it are the ones using it; a connection can stay open between requests.
+            </p>
             <Ollama g={gpu} />
+            <Clients g={gpu} />
           </section>
           <section className="course__section" aria-labelledby="gpu-curio">
             <h2 id="gpu-curio">Curio</h2>

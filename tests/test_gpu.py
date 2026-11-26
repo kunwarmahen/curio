@@ -4,7 +4,17 @@ from types import SimpleNamespace
 from fastapi.testclient import TestClient
 
 from curio_learn.api.app import create_app
-from curio_learn.gpu import ProcReader, app_from_cgroup, gpu_report, parse_cards, parse_pmon, tidy_command
+from curio_learn.gpu import (
+    ProcReader,
+    app_from_cgroup,
+    client_sockets,
+    container_names,
+    gpu_report,
+    ollama_clients,
+    parse_cards,
+    parse_pmon,
+    tidy_command,
+)
 from curio_learn.service import CurioService
 
 from .conftest import FakeLLM, FakeMetadata, FakeTranscripts
@@ -108,3 +118,95 @@ def test_api_gpu(settings):
         body = client.get("/api/v1/gpu").json()
         assert body["curio_busy"] is False and body["curio_doing"] == []
         assert "cards" in body and "processes_visible" in body and body["queue_message"]
+
+
+# /proc/net/tcp rows: sl, local, remote, state, ..., inode (field 9). 2CAA = 11434.
+def _tcp(*rows):
+    head = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n"
+    return head + "".join(
+        f"   0: 0100007F:{lp} 0100007F:{rp} {st} 00000000:00000000 00:00000000 00000000  1000        0 {ino} 1\n"
+        for lp, rp, st, ino in rows
+    )
+
+
+def _client_proc(tmp_path, pid, argv, cgroup, *, ns=None, tcp="", sockets=()):
+    _proc(tmp_path, pid, argv, cgroup)
+    d = tmp_path / str(pid)
+    (d / "net").mkdir()
+    (d / "net" / "tcp").write_text(tcp)
+    if ns:
+        (d / "ns").mkdir()
+        (d / "ns" / "net").symlink_to(f"net:[{ns}]")
+        (d / "fd").mkdir()
+        for i, ino in enumerate(sockets):
+            (d / "fd" / str(i + 3)).symlink_to(f"socket:[{ino}]")
+
+
+def test_client_sockets():
+    table = _tcp(("D000", "2CAA", "01", "111"), ("2CAA", "D001", "01", "222"), ("D002", "2CAA", "06", "333"))
+    assert client_sockets(table, 11434) == {"111"}  # established, to the port; not the server side
+
+
+def test_ollama_clients(tmp_path):
+    (tmp_path / "uptime").write_text("1000.0 5000.0\n")
+    host = _tcp(("D000", "2CAA", "01", "500"), ("D001", "2CAA", "01", "501"), ("2CAA", "D000", "01", "502"))
+    # On the host: a script and a network proxy (whose connection stands for a container).
+    _client_proc(
+        tmp_path, 10, ["python", "agent.py"], "0::/app.slice/snap.code.code-1.scope", ns="1", tcp=host, sockets=["500"]
+    )
+    _client_proc(
+        tmp_path, 11, ["/usr/bin/pasta", "--config-net"], "0::/user.slice/x.scope", ns="1", tcp=host, sockets=["501"]
+    )
+    # A quadlet container in its own user namespace: only its cgroup and table are readable.
+    quad = "0::/user.slice/user@1000.service/app.slice/sarathi-dvara.service/libpod-payload-" + "8f" * 32
+    own = _tcp(("D000", "2CAA", "01", "700"))
+    _client_proc(tmp_path, 20, ["podman-init", "--", "dvara"], quad, tcp=own)
+    _client_proc(tmp_path, 21, ["python", "/usr/local/bin/dvara", "--api-key", "s3cret"], quad, tcp=own)
+    # Two host-network containers share the host's table: ambiguous, left out.
+    unseen = _tcp(("D000", "2CAA", "01", "900"))
+    _client_proc(tmp_path, 30, ["python", "main.py"], "0::/user.slice/libpod-" + "aa" * 32 + ".scope", tcp=unseen)
+    _client_proc(tmp_path, 31, ["cloudflared"], "0::/user.slice/libpod-" + "bb" * 32 + ".scope", tcp=unseen)
+    # Curio's own container.
+    _client_proc(
+        tmp_path,
+        40,
+        ["python3", "curio", "api"],
+        "0::/user.slice/libpod-" + "cc" * 32 + ".scope",
+        tcp=_tcp(("D000", "2CAA", "01", "800")),
+    )
+
+    clients = ollama_clients(11434, ProcReader(str(tmp_path)), own_container="cc" * 6)
+    by_pid = {c.pid: c for c in clients}
+    assert set(by_pid) == {10, 21, 40}
+    assert by_pid[10].app == "Started from VS Code" and by_pid[10].exact and by_pid[10].connections == 1
+    dvara = by_pid[21]
+    assert dvara.app == "sarathi-dvara container" and not dvara.exact
+    assert dvara.command == "python /usr/local/bin/dvara --api-key …"
+    assert by_pid[40].curio and clients[-1].pid == 40  # Curio's own last
+
+
+def test_container_names(tmp_path):
+    cid = "ab" * 32
+    (tmp_path / "volatile-containers.json").write_text(f'[{{"id": "{cid}", "names": ["web"]}}]')
+    names = container_names(tmp_path)
+    assert names == {cid: "web"} and container_names(None) == {}
+    assert app_from_cgroup(f"0::/user.slice/libpod-{cid}.scope", "", names) == ("web container", False)
+
+
+def test_recent_ollama_clients_are_remembered(settings):
+    from datetime import UTC, timedelta
+
+    from curio_learn.api.app import GpuWatch
+    from curio_learn.gpu import GpuReport, OllamaClient
+
+    watch = GpuWatch(CurioService(settings, llm=FakeLLM(), metadata=FakeMetadata(), transcripts=FakeTranscripts()))
+    t0 = datetime(2026, 11, 26, 8, 0, tzinfo=UTC)
+    dvara = OllamaClient(pid=21, program="python", app="sarathi-dvara container")
+    first = watch._remember(GpuReport(checked_at=t0, nvidia_smi=True, ollama_clients=[dvara]))
+    assert [(c.app, c.connected, c.last_seen) for c in first] == [("sarathi-dvara container", True, t0)]
+    # Between its requests: still listed, as last seen.
+    later = watch._remember(GpuReport(checked_at=t0 + timedelta(minutes=5), nvidia_smi=True, ollama_clients=[]))
+    assert [(c.connected, c.last_seen) for c in later] == [(False, t0)]
+    # Forgotten after 15 minutes; None when connections can't be read.
+    assert watch._remember(GpuReport(checked_at=t0 + timedelta(minutes=16), nvidia_smi=True, ollama_clients=[])) == []
+    assert watch._remember(GpuReport(checked_at=t0, nvidia_smi=True)) is None

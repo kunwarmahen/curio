@@ -190,7 +190,7 @@ invent a timestamp: code converts the numbers to the original cue times.
 | `DELETE` | `/queue/run-now` | back to the queue hours for everything waiting → `QueueStatus` |
 | `POST` | `/queue/{id}/start` | start a queued analysis now → `202` (`400` if it isn't queued any more) |
 | `DELETE` | `/queue/{id}` | remove a queued analysis |
-| `GET`  | `/gpu` | `GpuStatus`: `cards[]` (utilization, memory, temperature, power, fan), `processes[]` (pid, program, command with secrets hidden, `app` from the cgroup, kind, memory, utilization, running time, `curio`), `processes_visible`, `ollama[]` (loaded models, VRAM, `expires_at`, `curio_model`), and `curio_busy`, `curio_doing[]`, `curio_last_model_use`, `queue_message`. Read at most every 2 s |
+| `GET`  | `/gpu` | `GpuStatus`: `cards[]` (utilization, memory, temperature, power, fan), `processes[]` (pid, program, command with secrets hidden, `app` from the cgroup, kind, memory, utilization, running time, `curio`), `processes_visible`, `ollama[]` (loaded models, VRAM, `expires_at`, `curio_model`), `ollama_clients[]` (programs connected to Ollama: pid, program, command, app, `connections`, `curio`, `exact`, `connected`, `last_seen`; `null` when connections can't be read), and `curio_busy`, `curio_doing[]`, `curio_last_model_use`, `queue_message`. Read at most every 2 s |
 | `GET`  | `/videos/recent?limit=10` | `[ {video, analysis_id, profile, analyzed_at, playlist_s, watch_map[]} ]` |
 | `GET`  | `/videos/{video_id}/transcript` | `Transcript` (normalized blocks) |
 | `GET`  | `/analyses/{id}/completed` | ids of segments marked watched |
@@ -492,7 +492,40 @@ For each pid it reads `/proc`:
   own when the id matches the container's hostname.
 - `stat` plus `uptime`: running time.
 
-Ollama's `/api/ps` gives the loaded models. `processes_visible` is false when memory
+Ollama's `/api/ps` gives the loaded models.
+
+**Ollama's clients.** Ollama can't say who loaded a model, so the page lists the
+programs with an established TCP connection to Ollama's port (from
+`CURIO_OLLAMA_HOST`).
+1. Processes are grouped by network namespace (`/proc/<pid>/ns/net`). For each
+   namespace, one process's `/proc/<pid>/net/tcp{,6}` gives the inodes of client
+   sockets (state 01, remote port = Ollama's).
+2. Each process's `/proc/<pid>/fd` links (`socket:[inode]`) match those inodes to a
+   pid.
+3. Network proxies (pasta, slirp4netns, rootlessport) are left out. A container's
+   connection shows up there too, and the container is found in its own namespace.
+
+A process in another user namespace hides its `ns` and `fd` links, even when it runs
+as the same host uid. That covers the containers of other rootless Podman setups,
+quadlet units and keep-id containers. Its `cgroup`, `cmdline` and `net/tcp` stay
+readable:
+- These processes are grouped by cgroup. A group whose client sockets weren't already
+  seen in a readable namespace is credited as a whole, `exact: false`, showing its
+  main program past an init wrapper (podman-init, catatonit, tini, conmon).
+- A table that several groups share is skipped. That's a namespace they share: the
+  host's, for host-network containers and conmon, where the owner can't be told.
+
+Containers are named in one of two ways:
+- a systemd (quadlet) unit's container is named after its unit
+  (`…/sarathi-dvara.service/libpod-payload-<id>`);
+- when Curio runs on the host, Podman's store
+  (`overlay-containers/{volatile-,}containers.json`) names the rest.
+
+In Curio's container the store isn't readable (it runs as user `curio`), so a plain
+`podman run` container shows as "Container <id>". The pid of Curio's own process
+(on the host) or container (hostname = id) is marked `curio`. A client connects only
+while it sends a request, so `GpuWatch` keeps each one seen in the last 15 minutes
+(`connected: false` and `last_seen` once it's gone). A scan takes about 0.2 s. `processes_visible` is false when memory
 is in use but pmon lists nobody, which means a container without `--pid=host`. A
 `GpuWatch` on the app caches the report for 2 s, so several open pages cost one read.
 

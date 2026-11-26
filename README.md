@@ -184,14 +184,20 @@ The **GPU** page (in the menu) shows what's on the GPU right now and refreshes e
   "Started from VS Code" for a script run in its terminal, or a container), and its
   command line;
 - the models Ollama has loaded, whether each is one of Curio's, and when Ollama will
-  unload it if nothing uses it. Ollama can't say which program asked for a model;
+  unload it if nothing uses it;
+- **Programs using Ollama**: Ollama can't say who asked for a model, so Curio lists
+  the programs that open a connection to it, such as a script or another container
+  ("sarathi-dvara container"). A program connects only while it sends a request, so
+  the list keeps each one seen in the last 15 minutes while the page was open, with
+  when it was last seen;
 - what Curio itself is doing.
 
 Command-line arguments that look like secrets (a token, key, password…) are hidden,
 but the page is open to anyone who can open Curio. In Podman, naming the programs
 needs the host's process list: `curio.sh` shares it whenever the GPU check is on. Set
 `CURIO_GPU_PROCESSES=0` and restart to turn that off; the page then shows only the
-card and Ollama.
+card and Ollama's models. A container started with a plain `podman run` shows as
+"Container" plus its id and main command; one run by a systemd unit shows its name.
 
 ## Courses
 

@@ -5,6 +5,12 @@ Read-only and cheap (one `nvidia-smi` query, one `pmon` sample, `/proc`, Ollama'
 only when it shares the host's process namespace (`--pid=host`, which `curio.sh` adds
 with the GPU check); without it the cards and Ollama are still reported.
 
+Ollama's clients are the programs with a TCP connection open to its port, found in
+each network namespace's `/proc/<pid>/net/tcp` and matched to a pid by its socket in
+`/proc/<pid>/fd`. Another container's processes (another user namespace) hide their
+sockets, so that container is named as a whole. A container run by a systemd
+(quadlet) unit is named after the unit; on the host, Podman's store names the rest.
+
 Commands are shown, but any argument that looks like a secret (a flag or `key=value`
 named token, key, secret, password, auth or credential) is hidden: the page can be
 opened from the LAN.
@@ -12,12 +18,15 @@ opened from the LAN.
 
 from __future__ import annotations
 
+import contextlib
+import json
 import logging
 import os
 import re
 import shutil
 import socket
 import subprocess
+from collections import Counter
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -61,6 +70,22 @@ class OllamaModel(BaseModel):
     curio_model: bool = False  # one of the models Curio is set to use
 
 
+class OllamaClient(BaseModel):
+    """A program with a connection open to Ollama now (it may be idle between requests)."""
+
+    pid: int
+    program: str
+    command: str = ""
+    app: str = ""
+    connections: int = 1
+    curio: bool = False
+    # False when only its container is known: its sockets can't be read from here (it
+    # runs in another user namespace), so this is the container's main program.
+    exact: bool = True
+    connected: bool = True  # False: seen connected recently, not now
+    last_seen: datetime | None = None
+
+
 class GpuReport(BaseModel):
     checked_at: datetime
     nvidia_smi: bool  # whether nvidia-smi could be run at all
@@ -71,6 +96,8 @@ class GpuReport(BaseModel):
     processes_visible: bool = True
     ollama_reachable: bool = False
     ollama: list[OllamaModel] = []
+    # None when the connections can't be read here (no host processes visible).
+    ollama_clients: list[OllamaClient] | None = None
 
 
 Runner = Callable[[list[str]], str]
@@ -186,7 +213,8 @@ def tidy_command(argv: list[str]) -> str:
 
 _SNAP = re.compile(r"^snap\.([^.]+)\.")
 _APP = re.compile(r"^app-(?:gnome-|kde-|flatpak-)?(.+?)(?:-\d+)?\.scope$")
-_CONTAINER = re.compile(r"(?:libpod|docker|crio)-(?:conmon-)?([0-9a-f]{12,64})\.scope")
+# libpod-<id>.scope, or libpod-payload-<id> for a container run by a systemd (quadlet) unit.
+_CONTAINER = re.compile(r"(?:libpod|docker|crio)-(?:conmon-|payload-)?([0-9a-f]{12,64})(?:\.scope|$|/)")
 FRIENDLY = {
     "code": "VS Code",
     "brave": "Brave",
@@ -198,14 +226,19 @@ FRIENDLY = {
 }
 
 
-def app_from_cgroup(text: str, own_container: str = "") -> tuple[str, bool]:
-    """What started a process, from its cgroup path; and whether it is Curio's container."""
+def app_from_cgroup(text: str, own_container: str = "", names: dict[str, str] | None = None) -> tuple[str, bool]:
+    """What started a process, from its cgroup path; and whether it is Curio's container.
+    `names` maps container ids to names."""
     path = text.strip().splitlines()[-1].split("::", 1)[-1] if text.strip() else ""
     if m := _CONTAINER.search(path):
         cid = m.group(1)
         if own_container and cid.startswith(own_container[:12]):
             return "Curio (this app's container)", True
-        return f"Container {cid[:12]}", False
+        name = (names or {}).get(cid)
+        if not name:  # a container run by a systemd (quadlet) unit is named after it
+            unit = path[: m.start()].rstrip("/").rsplit("/", 1)[-1]
+            name = unit.removesuffix(".service") if unit.endswith(".service") else ""
+        return (f"{name} container" if name else f"Container {cid[:12]}"), False
     parts = [p for p in path.split("/") if p and p not in ("..", "container")]
     for part in reversed(parts):
         if part.endswith(".service") and not part.startswith("user@"):
@@ -231,11 +264,84 @@ def started_from(app: str, program: str) -> str:
     return app
 
 
+def container_names(directory: str | Path | None) -> dict[str, str]:
+    """Container id → name from Podman's store directory (`overlay-containers`)."""
+    names: dict[str, str] = {}
+    if not directory:
+        return names
+    for file in ("containers.json", "volatile-containers.json"):
+        try:
+            entries = json.loads((Path(directory) / file).read_text())
+        except (OSError, ValueError):
+            continue
+        for c in entries if isinstance(entries, list) else []:
+            if isinstance(c, dict) and c.get("id") and c.get("names"):
+                names[c["id"]] = c["names"][0]
+    return names
+
+
+_PROXIES = ("pasta", "slirp4netns", "rootlessport", "rootlesskit")
+_INITS = {"podman-init", "catatonit", "tini", "dumb-init", "conmon"}
+
+
+def _program(argv: list[str] | None) -> str:
+    return argv[0].split(" ", 1)[0].rsplit("/", 1)[-1] if argv else ""
+
+
+def client_sockets(tcp: str, port: int) -> set[str]:
+    """Socket inodes of established connections to `port` in a /proc/net/tcp table."""
+    out = set()
+    for line in tcp.splitlines():
+        f = line.split()
+        if len(f) < 10 or f[3] != "01" or ":" not in f[2]:
+            continue
+        try:
+            if int(f[2].rsplit(":", 1)[1], 16) == port:
+                out.add(f[9])
+        except ValueError:
+            continue
+    return out
+
+
 class ProcReader:
     """Reads /proc for a pid; every read can fail (gone, or not visible here)."""
 
     def __init__(self, root: str = "/proc"):
         self.root = Path(root)
+
+    def pids(self) -> list[int]:
+        try:
+            return [int(p.name) for p in self.root.iterdir() if p.name.isdigit()]
+        except OSError:
+            return []
+
+    def netns(self, pid: int) -> str:
+        try:
+            return os.readlink(self.root / str(pid) / "ns" / "net")
+        except OSError:
+            return ""
+
+    def tcp(self, pid: int) -> str:
+        text = ""
+        for name in ("tcp", "tcp6"):
+            with contextlib.suppress(OSError):
+                text += (self.root / str(pid) / "net" / name).read_text()
+        return text
+
+    def sockets(self, pid: int) -> set[str]:
+        """Inodes of the pid's open sockets."""
+        out = set()
+        try:
+            for fd in (self.root / str(pid) / "fd").iterdir():
+                try:
+                    target = os.readlink(fd)
+                except OSError:
+                    continue
+                if target.startswith("socket:["):
+                    out.add(target[8:-1])
+        except OSError:
+            pass
+        return out
 
     def cmdline(self, pid: int) -> list[str] | None:
         try:
@@ -260,18 +366,78 @@ class ProcReader:
             return None
 
 
+def ollama_clients(
+    port: int, proc: ProcReader, own_container: str = "", names: dict[str, str] | None = None
+) -> list[OllamaClient]:
+    """Programs with a connection open to Ollama's port. Network proxies (pasta and the
+    like) are left out: the container behind them is found in its own namespace."""
+    by_ns: dict[str, list[int]] = {}
+    # Processes in another user namespace (another container's) hide their namespace
+    # and sockets but not their cgroup or connection table: grouped by cgroup instead.
+    hidden: dict[str, list[int]] = {}
+    for pid in sorted(proc.pids()):
+        if ns := proc.netns(pid):
+            by_ns.setdefault(ns, []).append(pid)
+        elif "libpod" in (cg := proc.cgroup(pid)) or "docker" in cg:
+            hidden.setdefault(cg, []).append(pid)
+    found: dict[int, tuple[int, bool]] = {}
+    seen: set[str] = set()
+    for pids in by_ns.values():
+        wanted = client_sockets(proc.tcp(pids[0]), port)
+        seen |= wanted
+        if not wanted:
+            continue
+        for pid in pids:
+            if n := len(proc.sockets(pid) & wanted):
+                found[pid] = (n, True)
+    # A table several groups share is a namespace they share (the host's, for
+    # containers on the host network, or conmon): whose connection it is can't be told.
+    tables = {cg: frozenset(client_sockets(proc.tcp(pids[0]), port) - seen) for cg, pids in hidden.items()}
+    shared = Counter(tables.values())
+    for cg, pids in hidden.items():
+        table = tables[cg]
+        if table and shared[table] == 1 and not any(p in found for p in pids):
+            # The container's main program, past an init wrapper.
+            main = next((p for p in pids if _program(proc.cmdline(p)) not in _INITS), pids[0])
+            found[main] = (len(table), False)
+    clients = []
+    for pid, (n, exact) in found.items():
+        argv = proc.cmdline(pid) or []
+        program = _program(argv) or str(pid)
+        if program.startswith(_PROXIES):
+            continue
+        app, curio = app_from_cgroup(proc.cgroup(pid), own_container, names)
+        if pid == os.getpid():  # Curio run on the host
+            app, curio = "Curio (this app)", True
+        clients.append(
+            OllamaClient(
+                pid=pid,
+                program=program,
+                command=tidy_command(argv) if argv else "",
+                app=started_from(app, program),
+                connections=n,
+                curio=curio,
+                exact=exact,
+            )
+        )
+    return sorted(clients, key=lambda c: (c.curio, c.app, c.pid))
+
+
 def gpu_report(
     *,
     own_models: set[str],
     ollama_client=None,
+    ollama_port: int = 11434,
     nvidia_smi: str | None = None,
     run: Runner = _run,
     proc: ProcReader | None = None,
     own_container: str | None = None,
+    names_dir: str | Path | None = None,
 ) -> GpuReport:
     smi = nvidia_smi if nvidia_smi is not None else (shutil.which("nvidia-smi") or "")
     proc = proc or ProcReader()
     own_container = own_container if own_container is not None else socket.gethostname()
+    names = container_names(names_dir)
     report = GpuReport(checked_at=datetime.now(UTC), nvidia_smi=bool(smi))
     if smi:
         try:
@@ -287,7 +453,7 @@ def gpu_report(
                 log.warning("nvidia-smi pmon failed (%s)", exc)
         for row in rows:
             argv = proc.cmdline(row["pid"])
-            app, curio = app_from_cgroup(proc.cgroup(row["pid"]), own_container)
+            app, curio = app_from_cgroup(proc.cgroup(row["pid"]), own_container, names)
             program = row["program"]
             if argv:
                 program = argv[0].split(" ", 1)[0].rsplit("/", 1)[-1]
@@ -321,4 +487,7 @@ def gpu_report(
             report.ollama_reachable = True
         except Exception as exc:
             log.warning("Couldn't ask Ollama which models are loaded (%s)", exc)
+    # Only meaningful where the host's processes are visible (on the host, or --pid=host).
+    if report.processes_visible and (report.processes or not smi):
+        report.ollama_clients = ollama_clients(ollama_port, proc, own_container, names)
     return report

@@ -346,6 +346,19 @@ export interface OllamaModel {
   curio_model: boolean
 }
 
+/** A program with a connection open to Ollama now. */
+export interface OllamaClient {
+  pid: number
+  program: string
+  command: string
+  app: string
+  connections: number
+  curio: boolean
+  exact: boolean // false: only its container is known
+  connected: boolean // false: seen connected in the last 15 minutes, not now
+  last_seen: string | null
+}
+
 /** Who is using the GPU right now. */
 export interface GpuStatus {
   checked_at: string
@@ -355,6 +368,7 @@ export interface GpuStatus {
   processes_visible: boolean
   ollama_reachable: boolean
   ollama: OllamaModel[]
+  ollama_clients: OllamaClient[] | null
   curio_busy: boolean
   curio_doing: string[]
   curio_last_model_use: string | null
