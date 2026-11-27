@@ -5,6 +5,7 @@ import {
   type Course,
   type CourseLecture,
   type CoursePart,
+  type GoalFit,
   type CoursePlan,
   type CourseRef,
   type CoursePractice,
@@ -524,6 +525,7 @@ function CoursePlayer(props: { course: Course; plan: CoursePlan; lectures: React
               <p className="muted">
                 {clock(now.part.start_s)}–{clock(now.part.end_s)}, {duration(now.part.duration_s)}.{' '}
                 {IMPORTANCE_LABEL[now.part.importance]}, scored {Math.round(now.part.score)} of 100.
+                {now.part.goal_fit && ` ${GOAL_FIT_LABEL[now.part.goal_fit]}`}
               </p>
               <dl className="now__facts">
                 <dt>What you'll learn</dt>
@@ -666,6 +668,7 @@ function CoursePlayer(props: { course: Course; plan: CoursePlan; lectures: React
                         <span className="segment__title">
                           {p.title}
                           {watched.has(p.key) && <span className="segment__done"> Watched</span>}
+                          {p.goal_fit === 'spine' && <span className="segment__goal"> Key to your goal</span>}
                         </span>
                         <span className="segment__meta">
                           {clock(p.start_s)}–{clock(p.end_s)}, {duration(p.duration_s)}
@@ -1197,6 +1200,7 @@ function CoursePlaylistEditor(props: {
                         {' '}
                         {duration(c.duration_s)}
                         {c.curio_pick ? ", Curio's pick" : c.importance === 'skip' ? ', marked skip' : ''}
+                        {c.goal_fit && `, ${GOAL_FIT_SHORT[c.goal_fit]}`}
                         {c.watched ? ', watched' : ''}
                       </span>
                     </span>
@@ -1237,6 +1241,20 @@ function CoursePlaylistEditor(props: {
 
 /** A part's colour. A section Curio marked skip that the learner added to their own
  *  playlist is drawn like an optional part: hatching means "left out". */
+/** A curriculum's rating of a section for its goal, as a sentence and as a short note. */
+const GOAL_FIT_LABEL: Record<Exclude<GoalFit, ''>, string> = {
+  spine: 'One of the key sections for the curriculum’s goal.',
+  core: 'Central to the curriculum’s goal.',
+  supporting: 'Supports the curriculum’s goal.',
+  aside: 'Off the goal’s main path.',
+}
+const GOAL_FIT_SHORT: Record<Exclude<GoalFit, ''>, string> = {
+  spine: 'key to the goal',
+  core: 'central to the goal',
+  supporting: 'supports the goal',
+  aside: 'off the goal',
+}
+
 function shade(p: CoursePart): CoursePart['importance'] {
   return p.importance === 'skip' ? 'optional' : p.importance
 }

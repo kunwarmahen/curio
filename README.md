@@ -276,6 +276,21 @@ than trade them for a foundation; give it more time and the foundations go in. W
 and **In the playlist because** (or **Lays the ground for**) names the sections that
 need it.
 
+The playlist is picked for the curriculum's goal, not only by how good each section is
+in its own video. On the first build Curio rates every section against the goal
+(central, supporting or off the goal's path) and then chooses the **key sections**:
+the clearest one for each idea the goal names, in the order you should meet them.
+Those go in first, then the central ones; sections off the goal's path only fill time
+that's left. A 1-hour "deep learning from the math up" playlist then has vectors,
+matrices, gradient descent, the chain rule, micrograd and attention instead of
+Cramer's rule and PyTorch internals. The rating takes a few minutes with a local
+model on a 40-lecture curriculum, once: building again at another length reuses it,
+and a lecture added later is rated when the next build needs it. A part that is one of
+the key sections shows ★ **Key to your goal** in the playlist; while a part plays, and
+in **Edit the playlist**, each section says how it fits the goal. The checklist (Easy
+to miss) is written for the goal too. Write the goal as what you want to be able to
+do; the rating can only follow what it says.
+
 A new curriculum has no playlist yet: press **Build the course playlist** on its page.
 Every build first puts the lectures in order. You can switch the order on the
 curriculum's page any time, then press **Build again with this length**.

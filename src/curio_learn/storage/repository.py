@@ -742,6 +742,12 @@ class Repository:
         with self.session() as db, db.begin():
             db.merge(SettingRow(key=key, value=value))
 
+    def delete_setting(self, key: str) -> None:
+        with self.session() as db, db.begin():
+            row = db.get(SettingRow, key)
+            if row is not None:
+                db.delete(row)
+
     # -------------------------------------------------------------- embeddings
 
     def phrase_vectors(self, model: str, keys: list[str]) -> dict[str, list[float]]:

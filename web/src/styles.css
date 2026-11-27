@@ -2297,3 +2297,12 @@ button.stretch:hover,
     transition: none;
   }
 }
+.segment__goal {
+  font-weight: 400;
+  font-size: var(--t-small);
+  color: var(--ink-muted);
+}
+.segment__goal::before {
+  content: '★';
+  margin-right: 0.25rem;
+}

@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -78,6 +79,16 @@ PAIRS_PER_CALL = 12
 # disagreed on 10; every "repeat" was a one-in-three call, so a rebuild could drop a
 # section one day and keep it the next. At 0 the runs were identical.
 PAIR_TEMPERATURE = 0.0
+# A curriculum: each section rated for the curriculum's goal once (`rate_goal_fit`); a
+# section's score for the selection is then `GOAL_SHARE` of its fit's points and the
+# rest its own video's score, which ranks it only within that video.
+# "spine": the core sections chosen as the clearest teaching of each idea the goal names
+# (`goal_spine`), so each idea gets in before more of one source's core does.
+GoalFit = Literal["core", "supporting", "aside"]
+FIT_POINTS: dict[str, float] = {"spine": 100.0, "core": 80.0, "supporting": 55.0, "aside": 20.0}
+FIT_ORDER = ("spine", "core", "supporting", "aside")
+GOAL_SHARE = 0.5
+FIT_BATCH = 100  # sections a call
 
 
 class PairVerdictOut(BaseModel):
@@ -89,6 +100,20 @@ class PairVerdictOut(BaseModel):
 
 class OverlapOut(BaseModel):
     verdicts: list[PairVerdictOut]
+
+
+class GoalFitOut(BaseModel):
+    section: str
+    fit: GoalFit
+
+
+class GoalFitsOut(BaseModel):
+    ratings: list[GoalFitOut]
+
+
+class GoalSpineOut(BaseModel):
+    # Capped in the schema only, as the checklist.
+    spine: list[str] = Field(json_schema_extra={"maxItems": 30})
 
 
 class ChecklistPointOut(BaseModel):
@@ -261,9 +286,17 @@ def judge_pairs(
     return sum(not p.relation for p in pairs)
 
 
-def _outline(items: list[Item], lectures: Sequence[Lecture], budget_tokens: int) -> str:
-    """The course outline for the checklist; summaries of weaker sections are dropped
-    when it doesn't fit."""
+def _outline(
+    items: list[Item],
+    lectures: Sequence[Lecture],
+    budget_tokens: int,
+    *,
+    core: set[str] = frozenset(),
+    rank: Callable[[Item], float] | None = None,
+) -> str:
+    """The course outline for the checklist; summaries of weaker sections (by `rank`,
+    the video's score by default) are dropped when it doesn't fit. `core` items (a
+    curriculum's sections central to its goal) are marked."""
 
     def render(full: set[str]) -> str:
         parts = []
@@ -274,13 +307,15 @@ def _outline(items: list[Item], lectures: Sequence[Lecture], budget_tokens: int)
                     continue
                 s = it.section
                 line = f"{it.key} [{fmt_ts(s.start_s)}] {s.title}"
+                if core and it.key in core:
+                    line += " [core]"
                 if it.key in full:
                     concepts = f" ({', '.join(s.key_concepts)})" if s.key_concepts else ""
                     line += f": {s.summary}{concepts}"
                 parts.append(line)
         return "\n".join(parts)
 
-    ranked = sorted(items, key=lambda it: -it.scored.score.final)
+    ranked = sorted(items, key=lambda it: -(rank(it) if rank else it.scored.score.final))
     keep = len(ranked)
     text = render({it.key for it in ranked})
     while approx_tokens(text) > budget_tokens and keep > 0:
@@ -299,15 +334,23 @@ def write_checklist(
     shared: str,
     budget_tokens: int,
     retries: int,
+    goal: str = "",
+    fits: dict[str, str] | None = None,
 ) -> tuple[list[ChecklistItem], int]:
-    """The checklist and how many points cited no real section (dropped)."""
+    """The checklist and how many points cited no real section (dropped). With a
+    curriculum's `goal` and `fits` (item key to fit), the outline marks its core
+    sections and keeps the summaries of the ones that fit the goal best."""
     by_key = {it.key: it for it in items}
+    fits = fits or {}
+    core = {k for k, f in fits.items() if f in ("spine", "core")}
+    rank = (lambda it: goal_score(it.scored.score.final, fits.get(it.key))) if fits else None
+    outline = _outline(items, lectures, budget_tokens, core=core, rank=rank)
     out = generate_structured(
         provider,
         ChecklistOut,
         model=model,
         system=prompts.COURSE_CHECKLIST_SYSTEM,
-        user=prompts.course_checklist_user(outline=_outline(items, lectures, budget_tokens)),
+        user=prompts.course_checklist_user(outline=outline, goal=goal),
         shared_prefix=shared,
         max_tokens=2500,
         retries=retries,
@@ -333,11 +376,145 @@ def write_checklist(
     return points, dropped
 
 
-def _for_course(item: Item, *, penalty: float = 0.0, pinned: bool = False) -> ScoredSection:
-    """A copy of the section keyed for the whole course, for the selector."""
+def goal_score(score: float, fit: str | None, share: float = GOAL_SHARE) -> float:
+    """A section's score for a curriculum: its video's score blended with how well it
+    fits the goal. A section with no rating counts as supporting. A spine section scores
+    100 whatever its video's score: the spine is the goal's ideas, one section each, and
+    a video's own ranking would favour one source's spine over another's (3Blue1Brown's
+    gradient descent at 73 lost to Karpathy's sections at 100)."""
+    if fit == "spine" and share > 0:
+        return 100.0
+    return round((1 - share) * score + share * FIT_POINTS.get(fit or "supporting", FIT_POINTS["supporting"]), 2)
+
+
+def part_fit(part: CoursePart, items: Sequence[Item], fits: dict[str, str]) -> str:
+    """A part's fit: the best of its sections' (by item key in `fits`)."""
+    keys = {it.key for it in items if it.lecture.analysis.id == part.analysis_id and it.section.id in part.section_ids}
+    got = {fits[k] for k in keys if k in fits}
+    return next((f for f in FIT_ORDER if f in got), "")
+
+
+def fit_key(item: Item) -> str:
+    """How a rating is saved: by video and section, so it survives reordering."""
+    return f"{item.lecture.analysis.video.video_id}:{item.section.id}"
+
+
+def rate_goal_fit(
+    provider: LLMProvider,
+    items: list[Item],
+    lectures: Sequence[Lecture],
+    *,
+    goal: str,
+    model: str,
+    shared: str,
+    retries: int,
+    progress: Progress,
+    batch: int = FIT_BATCH,
+) -> tuple[dict[str, str], int]:
+    """Each item's fit for the goal, by item key, and how many got none. Batches are
+    about the same size (at most `batch`) and keep a lecture's sections together where
+    they can; every call sees all lecture titles."""
+    titles = "\n".join(f"{lec.name}: {lec.analysis.video.title}" for lec in lectures)
+    # Even batches: a lecture rated alone at the end came back all aside (CS329Z's
+    # evaluation lecture, 22 sections), with nothing beside it to compare.
+    batch = math.ceil(len(items) / max(1, math.ceil(len(items) / batch)))
+    batches: list[list[Item]] = []
+    for it in items:
+        if (
+            batches
+            and len(batches[-1]) < batch
+            and (batches[-1][-1].lecture is it.lecture or len(batches[-1]) + _left_in(items, it) <= batch)
+        ):
+            batches[-1].append(it)
+        else:
+            batches.append([it])
+    fits: dict[str, str] = {}
+    for n, group in enumerate(batches, 1):
+        progress(f"Rating {len(items)} sections for the goal (batch {n} of {len(batches)})")
+        ids = [it.key for it in group]
+        try:
+            out = generate_structured(
+                provider,
+                GoalFitsOut,
+                model=model,
+                system=prompts.GOAL_FIT_SYSTEM,
+                user=prompts.goal_fit_user(
+                    goal=goal,
+                    lectures=titles,
+                    sections="\n".join(f"{it.key} {it.section.title}: {it.section.summary}" for it in group),
+                    ids=ids,
+                ),
+                shared_prefix=shared,
+                max_tokens=25 * len(group) + 300,
+                retries=retries,
+                task=f"course[goal fit {n}]",
+                temperature=PAIR_TEMPERATURE,
+            )
+        except LLMError as exc:
+            log.warning("Goal fit batch %d failed: %s", n, exc)
+            continue
+        wanted = set(ids)
+        for r in out.ratings:
+            key = r.section.strip().upper().replace(" ", "")
+            if key in wanted and key not in fits:
+                fits[key] = r.fit
+    return fits, sum(it.key not in fits for it in items)
+
+
+def goal_spine(
+    provider: LLMProvider,
+    items: list[Item],
+    *,
+    goal: str,
+    model: str,
+    shared: str,
+    retries: int,
+) -> list[str]:
+    """The keys of the core `items` the model chose as the goal's spine, in its order
+    (only real ones, each once)."""
+    lines, last = [], None
+    for it in items:
+        if it.lecture is not last:
+            lines.append(f"## {it.lecture.name}: {it.lecture.analysis.video.title}")
+            last = it.lecture
+        lines.append(f"{it.key} {it.section.title}")
+    out = generate_structured(
+        provider,
+        GoalSpineOut,
+        model=model,
+        system=prompts.GOAL_SPINE_SYSTEM,
+        user=prompts.goal_spine_user(goal=goal, sections="\n".join(lines)),
+        shared_prefix=shared,
+        max_tokens=600,
+        retries=retries,
+        task="course[goal spine]",
+        temperature=PAIR_TEMPERATURE,
+    )
+    known = {it.key for it in items}
+    keys = [k.strip().upper().replace(" ", "") for k in out.spine]
+    return list(dict.fromkeys(k for k in keys if k in known))
+
+
+def _left_in(items: list[Item], it: Item) -> int:
+    """How many sections of `it`'s lecture there are (a lecture starts a new batch when
+    it doesn't fit in the current one)."""
+    return sum(x.lecture is it.lecture for x in items)
+
+
+def _for_course(
+    item: Item,
+    *,
+    penalty: float = 0.0,
+    pinned: bool = False,
+    fit: str | None = None,
+    goal_share: float | None = None,
+) -> ScoredSection:
+    """A copy of the section keyed for the whole course, for the selector. With a
+    `goal_share` (a curriculum with a goal), its score is `goal_score` of its `fit`."""
     s = item.scored
     prefix = f"L{item.lecture.position}."
-    score = s.score.model_copy(update={"final": max(0.0, s.score.final - penalty)})
+    base = goal_score(s.score.final, fit, goal_share) if goal_share is not None else s.score.final
+    score = s.score.model_copy(update={"final": max(0.0, base - penalty)})
     importance = s.importance
     if any(a.rule == BEYOND_BUDGET for a in s.score.adjustments):
         importance = Importance.ESSENTIAL  # relabeled only for the video's own time budget
@@ -520,9 +697,17 @@ def build_course_plan(
     groups: dict[str, str] | None = None,
     by_section: bool = False,
     similar: Similar | None = None,
+    goal: str = "",
+    known_fits: dict[str, str] | None = None,
+    on_fits: Callable[[dict[str, str]], None] = lambda _: None,
+    goal_share: float = GOAL_SHARE,
 ) -> CoursePlan:
     """`pinned` and `watched` are (analysis id, section id): pinned sections are always in
-    the playlist; watched ones start `WATCHED_PENALTY` points lower."""
+    the playlist; watched ones start `WATCHED_PENALTY` points lower.
+
+    A curriculum's `goal`: every section is rated for it (`known_fits`, saved by
+    `fit_key`, are reused; `on_fits` gets them all after new ones are rated) and scored
+    by `goal_score` for the selection and the checklist."""
     started = time.monotonic()
     warnings: list[str] = []
     lectures = sorted(lectures, key=lambda lec: lec.position)
@@ -552,6 +737,45 @@ def build_course_plan(
             warnings.append(f"Couldn't check for repeats across lectures ({exc}); some parts may repeat.")
     repeats = [p for p in pairs if p.relation == "repeat"]
 
+    # 3b. A curriculum: how well each section fits its goal.
+    fits: dict[str, str] = {}
+    if goal.strip() and items:
+        saved = known_fits or {}
+        fits = {it.key: saved[fit_key(it)] for it in items if fit_key(it) in saved}
+        todo = [it for it in items if it.key not in fits]
+        if todo:
+            new, missing = rate_goal_fit(
+                provider,
+                todo,
+                lectures,
+                goal=goal.strip(),
+                model=model,
+                shared=shared,
+                retries=retries,
+                progress=progress,
+            )
+            fits.update(new)
+            if not fits:
+                warnings.append("Couldn't rate the sections for the curriculum's goal; picked by each video's scores.")
+            elif missing:
+                warnings.append(f"{missing} section(s) weren't rated for the goal; they count as supporting.")
+        changed = bool(todo and fits)
+        # The spine is chosen again whenever a section is newly rated (a lecture added).
+        if fits and (changed or "spine" not in fits.values()):
+            fits = {k: "core" if f == "spine" else f for k, f in fits.items()}
+            core = [it for it in items if fits.get(it.key) == "core"]
+            if core:
+                progress("Choosing the sections each idea of the goal needs")
+                try:
+                    for k in goal_spine(provider, core, goal=goal.strip(), model=model, shared=shared, retries=retries):
+                        fits[k] = "spine"
+                    changed = True
+                except LLMError as exc:
+                    warnings.append(f"Couldn't choose the goal's key sections ({exc}); core sections count alike.")
+        if changed:
+            by_item = {it.key: it for it in items}
+            on_fits({**saved, **{fit_key(by_item[k]): f for k, f in fits.items()}})
+
     # 4. One selection across the course.
     progress("Picking the best parts across the course")
     weaker = {p.other.key for p in repeats}
@@ -560,6 +784,8 @@ def build_course_plan(
             it,
             penalty=(REPEAT_PENALTY if it.key in weaker else 0.0) + (WATCHED_PENALTY if it.key in seen else 0.0),
             pinned=it.key in required,
+            fit=fits.get(it.key),
+            goal_share=goal_share if fits else None,  # no ratings (none asked, or all failed): as before
         )
         for it in items
     ]
@@ -651,6 +877,8 @@ def build_course_plan(
         ]
         sequence = order_sections(placed, sources, [s.key for s in sources], similar)
     parts = course_parts(lectures, items, chosen, related, config, sequence=sequence)
+    if fits:
+        parts = [p.model_copy(update={"goal_fit": part_fit(p, items, fits)}) for p in parts]
 
     skipped: list[CourseRepeat] = []
     listed: set[str] = set()
@@ -678,6 +906,8 @@ def build_course_plan(
                 shared=shared,
                 budget_tokens=max(2000, context_tokens - 5000),
                 retries=retries,
+                goal=goal.strip(),
+                fits=fits,
             )
             if dropped:
                 warnings.append(f"Dropped {dropped} checklist point(s) that cited no section of the course.")

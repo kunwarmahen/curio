@@ -391,8 +391,56 @@ name. Name the method, failure or trade-off.
 - sections: the 1 to 3 section ids (like L3.S05) that teach it, exactly as in the outline."""
 
 
-def course_checklist_user(*, outline: str) -> str:
-    return f"{outline}\n\nWrite the points, each citing the sections that teach it."
+def course_checklist_user(*, outline: str, goal: str = "") -> str:
+    lead = (
+        f'The curriculum\'s goal: "{goal}". Sections marked [core] are central to it; prefer points they teach.\n\n'
+        if goal
+        else ""
+    )
+    return f"{lead}{outline}\n\nWrite the points, each citing the sections that teach it."
+
+
+GOAL_FIT_SYSTEM = """You are Curio, an expert teacher planning a curriculum: one playlist \
+from several courses and videos, for one learner's goal. You receive the goal, the titles of \
+all its lectures, and some of their sections, each with an id like L3.S05, a title and a \
+summary.
+
+Rate how much each section matters for the goal:
+- core: one of the ideas or skills the goal is about, or a direct step toward one. A learner \
+who skipped it would miss part of the goal.
+- supporting: helps with the goal (a worked example, an extra detail, a related idea), but a \
+learner short on time could skip it.
+- aside: off the goal's path: a side topic, a tooling or debugging detail, history, an \
+application the goal doesn't ask for, or a detail of one implementation.
+
+Doing the goal's work well is part of the goal: how to design, evaluate, test or debug what \
+the goal is about, and its pitfalls, are core or supporting, not aside. Judge only what the \
+goal asks for, not how well the section is made or how important it is inside its own video. \
+Rate every id you are given, once."""
+
+
+GOAL_SPINE_SYSTEM = """You are Curio, an expert teacher planning a curriculum for one \
+learner's goal from several courses and videos. You receive the goal and the sections rated \
+central to it, by lecture, each with an id like L3.S05 and a title.
+
+Choose the curriculum's spine: the sections a learner with little time must not miss.
+- Cover every idea or skill the goal names, and the steps between them.
+- For each idea, choose the one section that teaches it most directly; take a second only \
+when the idea has two parts the goal asks for (for example the intuition and the math, or \
+the idea and building it in code).
+- Spread over the sources that teach the goal; don't take a source's every section.
+- Choose 12 to 25 sections, in the order a learner should meet them."""
+
+
+def goal_spine_user(*, goal: str, sections: str) -> str:
+    return f'The goal: "{goal}"\n\nSections rated central to it:\n{sections}\n\nChoose the spine.'
+
+
+def goal_fit_user(*, goal: str, lectures: str, sections: str, ids: list[str]) -> str:
+    return (
+        f'The goal: "{goal}"\n\nAll lectures of the curriculum:\n{lectures}\n\n'
+        f"Sections to rate:\n{sections}\n\nRate each of: {', '.join(ids)}."
+    )
 
 
 COURSE_ASK_SYSTEM = """You are Curio, an expert teacher answering a learner's questions about \

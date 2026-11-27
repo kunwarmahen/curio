@@ -33,6 +33,7 @@ class FakeLLM:
         self.invalid_first = invalid_first
         self.kinds = kinds or {}
         self.temperatures: dict[str, float | None] = {}
+        self.fits: dict[str, str] = {}  # goal fit by section key ("L2.S01"); others: supporting
 
     def schema_for(self, model_cls: type[BaseModel]) -> dict:
         return {"_model": model_cls.__name__}
@@ -216,6 +217,14 @@ class FakeLLM:
                 for i, pid in enumerate(ids)
             ]
             return json.dumps({"verdicts": verdicts})
+        if name == "GoalFitsOut":
+            ids = user.rsplit("Rate each of: ", 1)[1].rstrip(".").split(", ")
+            return json.dumps({"ratings": [{"section": i, "fit": self.fits.get(i, "supporting")} for i in ids]})
+        if name == "GoalSpineOut":
+            import re
+
+            keys = re.findall(r"^(L\d+\.S\d+) ", user, re.M)
+            return json.dumps({"spine": keys[:1] + ["L9.S99"]})  # the first core section, and one not given
         if name == "ChecklistOut":
             import re
 

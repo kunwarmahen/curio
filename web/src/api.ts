@@ -415,7 +415,10 @@ export interface CoursePart {
   importance: Importance
   score: number
   also_in: CourseRef[]
+  goal_fit: GoalFit // a curriculum's rating for its goal ('' when not rated)
 }
+
+export type GoalFit = 'spine' | 'core' | 'supporting' | 'aside' | ''
 
 export interface CourseRepeat {
   section: CourseRef
@@ -521,6 +524,7 @@ export interface CourseSectionChoice {
   picked: boolean
   pinned: boolean // kept in Curio's picks whenever the playlist is built
   watched: boolean // in a part marked watched
+  goal_fit: GoalFit
 }
 
 export class ApiError extends Error {

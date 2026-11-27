@@ -81,6 +81,9 @@ NOTES_VERSION = 1
 STUDY_VERSION = 3
 # Bump when course playlist building changes should invalidate saved plans.
 COURSE_VERSION = 2
+# Bump when rating a curriculum's sections for its goal changes: saved ratings are dropped.
+GOAL_FIT_VERSION = 1
+GOAL_FIT_KEY = "goal_fit:"  # a setting per curriculum
 # Course playlist lengths offered, in minutes; the default is about 15 minutes a lecture.
 COURSE_MINUTES = (60, 90, 120, 180, 240, 360)
 
@@ -1253,6 +1256,7 @@ class CurioService:
         shown = {(p.analysis_id, sid) for p in (course.custom_parts or plan.parts) for sid in p.section_ids}
         pins = {tuple(x.split(":", 1)) for x in self.repo.course_pins(course_id)}
         watched = self._watched_sections(course)
+        fits = self.goal_fits(course_id)
         out = []
         for lec in self._course_lectures(course.lectures):
             for s in lec.analysis.sections:
@@ -1271,6 +1275,7 @@ class CurioService:
                         picked=key in shown,
                         pinned=key in pins,
                         watched=key in watched,
+                        goal_fit=fits.get(f"{lec.analysis.video.video_id}:{s.section.id}", ""),
                     )
                 )
         return out
@@ -1365,7 +1370,25 @@ class CurioService:
         return self.course(course_id)
 
     def delete_course(self, course_id: str) -> bool:
+        self.repo.delete_setting(GOAL_FIT_KEY + course_id)
         return self.repo.delete_course(course_id)
+
+    def goal_fits(self, course_id: str) -> dict[str, str]:
+        """A curriculum's saved ratings for its goal ("video id:section id" to core,
+        supporting or aside), if they were made for its goal now, by the course model."""
+        cur = self.repo.get_curriculum(course_id)
+        saved = self.repo.get_setting(GOAL_FIT_KEY + course_id)
+        if not cur or not saved or saved.get("key") != self._goal_fit_key(cur["goal"]):
+            return {}
+        return dict(saved.get("fits", {}))
+
+    def _goal_fit_key(self, goal: str) -> str:
+        return f"{self.course_llm_key()}|g{GOAL_FIT_VERSION}|{goal.strip()}"
+
+    def _save_goal_fits(self, course_id: str, fits: dict[str, str]) -> None:
+        cur = self.repo.get_curriculum(course_id)
+        if cur:
+            self.repo.set_setting(GOAL_FIT_KEY + course_id, {"key": self._goal_fit_key(cur["goal"]), "fits": fits})
 
     def course_llm_key(self) -> str:
         return f"{self.llm.name}:{self.settings.model_for('course')}:c{COURSE_VERSION}"
@@ -1395,6 +1418,8 @@ class CurioService:
         key = f"{','.join(ids)}|{minutes}|{self.course_llm_key()}"
         if cur is not None:
             key += f"|order:{cur['order']}"
+            if cur["goal"].strip():  # picked for the goal: a new goal, or the rating changing, builds again
+                key += f"|goal{GOAL_FIT_VERSION}:" + hashlib.sha256(cur["goal"].strip().encode()).hexdigest()[:12]
         pins = self.repo.course_pins(course_id)
         if pins:  # pinning changes the playlist: build it again
             key += "|pins:" + hashlib.sha256(",".join(pins).encode()).hexdigest()[:12]
@@ -1461,6 +1486,9 @@ class CurioService:
                 groups=cur["groups"] if cur else None,
                 by_section=bool(cur and cur["order"] == "sections"),
                 similar=self._phrase_matcher(self._lecture_sources(pending.course_id, lectures)) if cur else None,
+                goal=cur["goal"] if cur else "",
+                known_fits=self.goal_fits(pending.course_id),
+                on_fits=lambda fits: self._save_goal_fits(pending.course_id, fits),
             )
             plan.created_at = pending.created_at
             self.repo.save_course_plan(plan)

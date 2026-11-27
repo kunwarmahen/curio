@@ -319,3 +319,86 @@ def test_a_teacher_pulled_ahead_brings_its_own_teacher_along():
     v2 = src("v2", 2, [sec(0, teaches=["Gradient descent", "Loss landscape"], needs=["Neural networks"], start=0)])
     placed = [Placed("C0", "c", "S00", 0), Placed("V1", "v1", "S00", 0), Placed("V2", "v2", "S00", 0)]
     assert order_sections(placed, [c, v1, v2], ["c", "v1", "v2"]) == ["V1", "V2", "C0"]
+
+
+def test_a_curriculum_picks_for_its_goal_and_saves_the_ratings(service):
+    course_id, a, b, c = _library(service)
+    sources = [CurriculumSource(kind="course", id=course_id), CurriculumSource(kind="video", id=c)]
+    cid = service.create_curriculum("Build agents", sources)
+    fake = service.llm
+    plan = service.course_plan(cid, minutes=10)
+    assert "GoalFitsOut" in fake.calls and not any("goal" in w for w in plan.warnings)
+    assert {p.goal_fit for p in plan.parts} == {"supporting"}  # the fake rates all supporting
+    before = {(p.analysis_id, s) for p in plan.parts for s in p.section_ids}
+    # The same ratings at another length: nothing is rated again.
+    fake.calls.clear()
+    service.course_plan(cid, minutes=12)
+    assert "GoalFitsOut" not in fake.calls
+    # The goal decides: Curio's picks rated aside, one section left out rated core.
+    choices = service.course_playlist_sections(cid)
+    assert {ch.goal_fit for ch in choices if ch.picked} == {"supporting"}
+    left = next(ch for ch in choices if not ch.curio_pick and ch.importance.value != "skip")
+    keys = {(ch.analysis_id, ch.section_id): f"L{ch.lecture}.{ch.section_id}" for ch in choices}
+    fake.fits = {keys[k]: "aside" for k in before} | {keys[(left.analysis_id, left.section_id)]: "core"}
+    service.repo.delete_setting("goal_fit:" + cid)
+    fake.calls.clear()
+    fake.prompts.clear()
+    plan = service.course_plan(cid, minutes=10, force=True)
+    after = {(p.analysis_id, s) for p in plan.parts for s in p.section_ids}
+    assert (left.analysis_id, left.section_id) in after
+    assert any(p.goal_fit == "spine" for p in plan.parts)  # the only core section: the spine
+    assert "GoalSpineOut" in fake.calls
+    saved = service.goal_fits(cid)
+    assert list(saved.values()).count("spine") == 1 and "aside" in saved.values()
+    checklist_prompt = fake.prompts[fake.calls.index("ChecklistOut")]
+    assert 'goal: "Build agents"' in checklist_prompt and "[core]" in checklist_prompt
+    fake.calls.clear()
+    service.course_plan(cid, minutes=12, force=True)
+    assert "GoalSpineOut" not in fake.calls and "GoalFitsOut" not in fake.calls  # both saved
+    assert service.goal_fits(cid)  # saved, by video and section
+    service.delete_course(cid)
+    assert service.repo.get_setting("goal_fit:" + cid) is None
+
+
+def test_without_ratings_a_curriculum_picks_as_before(service, monkeypatch):
+    course_id, a, b, c = _library(service)
+    sources = [CurriculumSource(kind="course", id=course_id), CurriculumSource(kind="video", id=c)]
+    plain = service.course_plan(course_id, minutes=10)  # a plain course: no goal, no rating
+    assert "GoalFitsOut" not in service.llm.calls and all(p.goal_fit == "" for p in plain.parts)
+    cid = service.create_curriculum("Build agents", sources)
+    from curio_learn.analysis import course as C
+
+    monkeypatch.setattr(C, "rate_goal_fit", lambda *a, **k: ({}, len(a[1])))
+    plan = service.course_plan(cid, minutes=10)
+    assert any("Couldn't rate the sections" in w for w in plan.warnings)
+    assert all(p.goal_fit == "" for p in plan.parts)
+    assert service.goal_fits(cid) == {}
+
+
+def test_goal_score_and_batches_keep_a_lecture_together():
+    from curio_learn.analysis.course import goal_score, rate_goal_fit
+
+    assert goal_score(40, "spine") == 100 and goal_score(40, "spine", share=0.0) == 40
+    assert goal_score(90, "core") == 85 and goal_score(90, "aside") == 55
+    assert goal_score(90, None) == goal_score(90, "supporting") == 72.5
+    assert goal_score(80, "core", share=0.0) == 80
+
+    class Lec:
+        def __init__(self, n):
+            self.name, self.analysis = f"Lecture {n}", SimpleNamespace(video=SimpleNamespace(title=f"T{n}"))
+
+    l1, l2 = Lec(1), Lec(2)
+    items = [
+        SimpleNamespace(key=f"L1.S0{i}", lecture=l1, section=SimpleNamespace(title="t", summary="s")) for i in range(3)
+    ]
+    items += [
+        SimpleNamespace(key=f"L2.S0{i}", lecture=l2, section=SimpleNamespace(title="t", summary="s")) for i in range(3)
+    ]
+    fake = FakeLLM()
+    fake.fits = {"L2.S01": "core"}
+    fits, missing = rate_goal_fit(
+        fake, items, [l1, l2], goal="g", model="m", shared="", retries=0, progress=lambda _: None, batch=4
+    )
+    assert missing == 0 and fits["L2.S01"] == "core" and fits["L1.S00"] == "supporting"
+    batches = [p.rsplit("Rate each of: ", 1)[1] for p in fake.prompts]
+    assert batches == ["L1.S00, L1.S01, L1.S02.", "L2.S00, L2.S01, L2.S02."]  # lecture 2 didn't fit in the first

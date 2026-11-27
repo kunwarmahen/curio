@@ -1021,11 +1021,43 @@ ReAct left and nothing said why.
   (12)" as its first tab; no errors and no sideways scroll at 1280 and 390 px. All 12
   points still come from Karpathy's lectures 31–36 (see Known gaps).
 
+### A curriculum picks for its goal (2026-11-26)
+- Each section of a curriculum is rated for its goal (core / supporting / aside), then
+  one call chooses the **spine**: the clearest core section for each idea the goal
+  names. For the selection a section scores half its fit (core 80, supporting 55, aside
+  20) and half its video's score; a spine section scores 100. Ratings are saved per
+  curriculum and goal and reused at other lengths. Parts show ★ "Key to your goal"; the
+  editor and the playing part say how each section fits. The checklist gets the goal.
+- Topics a "from the math up" playlist must have were written down before the first
+  run (matrices as transformations, matrix multiplication, what a neuron computes,
+  gradient descent, backprop intuition, the chain rule, a network in code, attention,
+  the transformer block). Offline replay on a copy of the live database, stub model:
+  4, 5 and 6 of 9 at 1, 2 and 3 hours before; 7, 9 and 9 after. Aside time fell from
+  15–79 to 0–4 minutes.
+- Two rounds failed first. Blending alone (core 100, supporting 60, aside 20) took the
+  aside time out but left gradient descent and backpropagation out at every share:
+  core was 42% of the curriculum's time and inside it the video score decided again.
+  The spine with its video's score blended in still lost 3Blue1Brown's gradient descent
+  (73) to Karpathy's 100s at 1 hour, hence the flat 100.
+- CS329Z ("Build AI agents") rated its Terminal-Bench lecture all aside: it was rated
+  alone, the last 22 of 211 sections in batches of 100. Batches are now even (about 70)
+  and the prompt says evaluating, testing and debugging the goal's work is part of it.
+  Rated again, Terminal-Bench has two spine sections (verifier design, reward hacking)
+  and keeps 18 of its 19 minutes at 3 hours. CS329Z keeps about half its sections, its
+  needs met at 3 hours drop from 3 to 2, and the 3Blue1Brown video drops out.
+- Model time (qwen3.8 27B): rating 442 sections 2.8 min, 211 sections 1.4 min; the
+  spine 5–6 s. Real builds on the copy: deep learning 1 hour, 21 parts (16 spine, 5
+  core), 3.5 min with repeats and checklist; CS329Z 3 hours, 46 parts, 10 of 11
+  checklist points in the playlist. The page shows 16 badges; no errors and no
+  sideways scroll at 1280 and 390 px.
+
 ### Known gaps / next steps
-- A curriculum picks by each video's own scores, and its goal isn't used. Scores rank
-  sections within one lecture, so 42 lectures gave 173 "essential" sections and the
-  packing can't tell the core ideas (gradient descent, backpropagation) from side
-  topics. A goal-aware pass across the sources would be new work.
+- A curriculum's spine is one model call: run again it changed a little (RAG's two
+  sections left CS329Z's spine, two Terminal-Bench ones came in), so a 1-hour CS329Z
+  playlist has no RAG now. At 1 hour, spine sections over about 5 minutes lose to
+  shorter ones (backprop intuition, 5.9 min; self-attention, 9.4 min).
+- The deep-learning checklist is written for the goal but its pitfalls still sit in
+  the long coding lectures: 1 of 12 points is in the 1-hour playlist.
 - The share and swap rule are now swept over two libraries, but both are the same
   sources (CS329Z, Karpathy, 3Blue1Brown) for two goals; a curriculum of unrelated
   courses with many outside needs is still untried.

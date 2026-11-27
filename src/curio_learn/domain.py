@@ -514,6 +514,8 @@ class CoursePart(BaseModel):
     importance: Importance
     score: float
     also_in: list[CourseRef] = Field(default_factory=list)  # related sections in other lectures
+    # A curriculum: how well its best section fits the goal ("" when not rated)
+    goal_fit: Literal["spine", "core", "supporting", "aside", ""] = ""
 
     @computed_field
     @property
@@ -649,6 +651,7 @@ class CourseSectionChoice(BaseModel):
     picked: bool = False  # in the playlist shown now (the learner's, or else Curio's)
     pinned: bool = False  # kept in Curio's picks whenever the playlist is built
     watched: bool = False  # in a part the learner marked watched
+    goal_fit: Literal["spine", "core", "supporting", "aside", ""] = ""  # a curriculum's rating for its goal
 
     @computed_field
     @property

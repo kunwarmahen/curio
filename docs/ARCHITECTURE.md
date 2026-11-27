@@ -83,7 +83,7 @@ curio/
 │   │   ├── notes.py          learning notes, takeaways, definitions, Markdown export
 │   │   ├── ask.py            Ask the Video: context selection, grounded answers
 │   │   ├── study.py          quizzes and flashcards, spaced-repetition schedule
-│   │   ├── course.py         course playlist across lectures: repeats, checklist
+│   │   ├── course.py         course playlist across lectures: repeats, goal fit, checklist
 │   │   ├── course_ask.py     Ask the course: search across lectures, cited answers
 │   │   ├── curriculum.py     curricula: needs across sources, ordering, suggesting sources
 │   │   └── pipeline.py       orchestrates the steps, reports progress, saves step checkpoints
@@ -801,6 +801,36 @@ so one analyzed for another goal isn't queued again).
   adds (`worth`), past the share (`share`), the teacher repeats a part in the playlist
   (`repeat`) or is marked skip (`skip`); the page words the first two as "didn't fit
   this length".
+- **Picking for the goal** (`rate_goal_fit`, `goal_spine`, `goal_score` in
+  `analysis/course.py`): a section's score comes from its own video, half of it its
+  rank there, so 42 lectures gave 173 "essential" sections and the knapsack couldn't
+  tell the goal's ideas from side topics (a 1-hour deep-learning playlist had Cramer's
+  rule but no gradient descent). A curriculum with a goal now rates every watchable
+  section for it, core / supporting / aside, in even batches of at most 100 (whole
+  lectures together; every call sees all lecture titles; a lecture rated alone came
+  back all aside). One more call gets the titles of the core sections and chooses the
+  **spine**, 12–25 of them, one per idea the goal names. For the selection a section
+  scores `GOAL_SHARE` (0.5) of its fit's points (core 80, supporting 55, aside 20) plus
+  half its video's score; a spine section scores 100 flat, as a video's own ranking
+  favoured one source's spine (3Blue1Brown's gradient descent at 73 lost to Karpathy's
+  sections at 100). An unrated section counts as supporting; with no ratings at all
+  (the calls failed) the build picks as before and says so. The ratings are saved in
+  the `settings` table (`goal_fit:<course id>`), by video and section id, keyed by the
+  course model and the goal (`GOAL_FIT_VERSION`); only sections without one are rated
+  next time, and the spine is chosen again whenever any were. The plan key holds a hash
+  of the goal, so a curriculum built before is built again. Parts carry `goal_fit`
+  (their best section's), as do the editor's sections. The checklist gets the goal and
+  an outline with core sections marked `[core]`, summaries kept by goal score.
+  Measured offline on the two saved curricula (stub model: no repeats, no checklist),
+  against topics a "from the math up" playlist must have, written before the first
+  run: the deep-learning one covered 4, 5 and 6 of 9 at 1, 2 and 3 hours before and 7, 9
+  and 9 after (the 1-hour one has matrix multiplication too, in a 1.4-minute section
+  under the 2-minute rule); aside time fell from 15–79 minutes to 0–4. CS329Z kept about
+  half its sections (Jaccard 0.36–0.55), now spends its time on the agent lectures
+  rather than the 3Blue1Brown video, and kept Terminal-Bench (18 of 19 minutes at 3
+  hours) once batches were even. Blending without the spine was not enough: core was
+  42% of the deep-learning curriculum's time, and within it the video's score decided
+  again (gradient descent and backpropagation stayed out at every share).
 - **The share and the swap rule, swept** (2 libraries: live and test; 4 source orders:
   Curio's, Karpathy last, both videos last, the course reversed; 1, 2, 3 and 5 hours;
   both modes; share 0, 5, 10, 15, 20% and no cap; 384 builds, stub model). Needs of
